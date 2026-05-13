@@ -16,6 +16,8 @@ libc_a_SOURCES += \
         %D%/memrchr-asm.S \
         %D%/memrchr.c \
         %D%/memset.S \
+        %D%/rawmemchr-asm.S \
+        %D%/rawmemchr.c \
         %D%/setjmp.S \
         %D%/stpcpy.c \
         %D%/strcmp.S \
