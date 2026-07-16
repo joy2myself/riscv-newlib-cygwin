@@ -20,6 +20,8 @@ libc_a_SOURCES += \
 	%D%/memset.S \
 	%D%/setjmp.S \
 	%D%/stpcpy.c \
+	%D%/strcasecmp-asm.S \
+	%D%/strcasecmp.c \
 	%D%/strcat-asm.S \
 	%D%/strcat.c \
 	%D%/strchr-asm.S \
