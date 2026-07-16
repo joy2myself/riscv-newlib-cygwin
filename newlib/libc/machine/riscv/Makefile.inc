@@ -36,6 +36,8 @@ libc_a_SOURCES += \
 	%D%/strcspn.c \
 	%D%/strlen-asm.S \
 	%D%/strlen.c \
+	%D%/strncasecmp-asm.S \
+	%D%/strncasecmp.c \
 	%D%/strncat-asm.S \
 	%D%/strncat.c \
 	%D%/strncmp-asm.S \
