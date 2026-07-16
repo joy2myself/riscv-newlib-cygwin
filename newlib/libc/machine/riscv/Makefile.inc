@@ -41,4 +41,6 @@ libc_a_SOURCES += \
 	%D%/strnlen-asm.S \
 	%D%/strnlen.c \
 	%D%/strrchr-asm.S \
-	%D%/strrchr.c
+	%D%/strrchr.c \
+	%D%/strspn-asm.S \
+	%D%/strspn.c
