@@ -24,6 +24,7 @@ libc_a_SOURCES += \
 	%D%/strchr.c \
 	%D%/strchrnul-asm.S \
 	%D%/strchrnul.c \
+	%D%/strcmp-asm.S \
 	%D%/strcmp.S \
 	%D%/strcpy.c \
 	%D%/strlen-asm.S \
