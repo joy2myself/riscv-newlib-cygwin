@@ -15,6 +15,7 @@
 	%D%/vhyperinv.c \
 	%D%/vhypot.c \
 	%D%/verf.c \
+	%D%/vgamma.c \
 	%D%/vfallback.c \
 	%D%/tables/vm_exp_data.c \
 	%D%/tables/vm_log_data.c \
