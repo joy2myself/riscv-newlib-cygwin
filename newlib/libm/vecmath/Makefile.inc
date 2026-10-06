@@ -11,6 +11,9 @@
 	%D%/vsin.c \
 	%D%/vsinpi.c \
 	%D%/vatan.c \
+	%D%/vhyper.c \
+	%D%/vhyperinv.c \
+	%D%/vhypot.c \
 	%D%/vfallback.c \
 	%D%/tables/vm_exp_data.c \
 	%D%/tables/vm_log_data.c \
