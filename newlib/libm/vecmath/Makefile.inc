@@ -4,8 +4,14 @@
 
 %C%_src = \
 	%D%/vmisc.c \
+	%D%/vexp.c \
+	%D%/vexpm1.c \
+	%D%/vlog.c \
 	%D%/vpow.c \
 	%D%/vfallback.c \
+	%D%/tables/vm_exp_data.c \
+	%D%/tables/vm_log_data.c \
+	%D%/tables/vm_log2_data.c \
 	%D%/tables/vm_pow_log_data.c
 
 libvecmath_a_SOURCES += $(%C%_src)
