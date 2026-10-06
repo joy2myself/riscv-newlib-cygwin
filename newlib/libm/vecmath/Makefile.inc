@@ -17,6 +17,7 @@
 	%D%/verf.c \
 	%D%/vgamma.c \
 	%D%/vfallback.c \
+	%D%/vfabi.c \
 	%D%/tables/vm_exp_data.c \
 	%D%/tables/vm_log_data.c \
 	%D%/tables/vm_log2_data.c \
