@@ -333,6 +333,19 @@ AC_ARG_ENABLE(newlib-hw-misaligned-access,
   esac
  fi], [newlib_hw_misaligned_access=])dnl
 
+dnl Support --enable-vecmath
+dnl Builds libvecmath.a, the RISC-V RVV 1.0 double-precision vector math
+dnl library (array API entries vsin/vexp/..., VFABI aliases and inline
+dnl kernels).  RISC-V targets only; sources degrade to scalar fallbacks
+dnl automatically in multilibs without the V extension.
+AC_ARG_ENABLE(vecmath,
+[  --enable-vecmath    build libvecmath.a, the RISC-V RVV vector math library],
+[case "${enableval}" in
+  yes) newlib_vecmath=yes ;;
+  no)  newlib_vecmath=no  ;;
+  *)   AC_MSG_ERROR(bad value ${enableval} for --enable-vecmath option) ;;
+ esac], [newlib_vecmath=no])dnl
+
 AM_ENABLE_MULTILIB(, ..)
 NEWLIB_CONFIGURE(.)
 
@@ -350,6 +363,14 @@ newlib_hw_fp=false
 #   *) AC_MSG_ERROR(bad value ${enableval} for --enable-newlib-hw-fp) ;;
 # esac],[newlib_hw_fp=false])
 AM_CONDITIONAL(NEWLIB_HW_FP, test x$newlib_hw_fp = xtrue)
+
+if test "x${newlib_vecmath}" = xyes; then
+  case "${libm_machine_dir}" in
+    riscv) ;;
+    *) AC_MSG_ERROR([--enable-vecmath requires a RISC-V target (libm_machine_dir='${libm_machine_dir}')]) ;;
+  esac
+fi
+AM_CONDITIONAL(NEWLIB_VECMATH, test x$newlib_vecmath = xyes)
 
 # These get added in the top-level configure.in, except in the case where
 # newlib is being built natively.
@@ -452,6 +473,10 @@ fi
 
 if test "${newlib_register_fini}" = "yes"; then
   AC_DEFINE(_WANT_REGISTER_FINI, 1, [Register application finalization function using atexit.])
+fi
+
+if test "${newlib_vecmath}" = "yes"; then
+  AC_DEFINE(_WANT_VECMATH, 1, [Define to enable the RISC-V RVV vector math library libvecmath.])
 fi
 
 if test "${newlib_io_long_long}" = "yes"; then

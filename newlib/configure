@@ -838,6 +838,8 @@ HAVE_STDIO_DIR_TRUE
 HAVE_SIGNAL_DIR_FALSE
 HAVE_SIGNAL_DIR_TRUE
 CC_FOR_NEWLIB
+NEWLIB_VECMATH_FALSE
+NEWLIB_VECMATH_TRUE
 NEWLIB_HW_FP_FALSE
 NEWLIB_HW_FP_TRUE
 sys_dir
@@ -1003,6 +1005,7 @@ enable_newlib_long_time_t
 enable_newlib_use_gdtoa
 enable_newlib_use_malloc_in_execl
 enable_newlib_hw_misaligned_access
+enable_vecmath
 enable_multilib
 enable_target_optspace
 enable_malloc_debugging
@@ -1674,6 +1677,7 @@ Optional Features:
   --enable-newlib-use-gdtoa   Use gdtoa rather than legacy ldtoa
   --enable-newlib-use-malloc-in-execl   use malloc instead of alloca in execl, execle and execlp
   --enable-newlib-hw-misaligned-access   Use hardware word-by-word access instead of byte-by-byte for misaligned memory
+  --enable-vecmath    build libvecmath.a, the RISC-V RVV vector math library
   --enable-multilib       build many library versions (default)
   --enable-target-optspace  optimize for space
   --enable-malloc-debugging indicate malloc debugging requested
@@ -2622,6 +2626,17 @@ if test "${enable_newlib_hw_misaligned_access+set}" = set; then :
  fi
 else
   newlib_hw_misaligned_access=
+fi
+
+# Check whether --enable-vecmath was given.
+if test "${enable_vecmath+set}" = set; then :
+  enableval=$enable_vecmath; case "${enableval}" in
+  yes) newlib_vecmath=yes ;;
+  no)  newlib_vecmath=no  ;;
+  *)   as_fn_error $? "bad value ${enableval} for --enable-vecmath option" "$LINENO" 5 ;;
+ esac
+else
+  newlib_vecmath=no
 fi
 
 # Default to --enable-multilib
@@ -5320,6 +5335,21 @@ else
 fi
 
 
+if test "x${newlib_vecmath}" = xyes; then
+  case "${libm_machine_dir}" in
+    riscv) ;;
+    *) as_fn_error $? "--enable-vecmath requires a RISC-V target (libm_machine_dir='${libm_machine_dir}')" "$LINENO" 5 ;;
+  esac
+fi
+ if test x$newlib_vecmath = xyes; then
+  NEWLIB_VECMATH_TRUE=
+  NEWLIB_VECMATH_FALSE='#'
+else
+  NEWLIB_VECMATH_TRUE='#'
+  NEWLIB_VECMATH_FALSE=
+fi
+
+
 # These get added in the top-level configure.in, except in the case where
 # newlib is being built natively.
 LIBC_INCLUDE_GREP=`echo ${CC} | grep \/libc\/include`
@@ -6584,6 +6614,12 @@ $as_echo "#define _WANT_REGISTER_FINI 1" >>confdefs.h
 
 fi
 
+if test "${newlib_vecmath}" = "yes"; then
+
+$as_echo "#define _WANT_VECMATH 1" >>confdefs.h
+
+fi
+
 if test "${newlib_io_long_long}" = "yes"; then
 
 $as_echo "#define _WANT_IO_LONG_LONG 1" >>confdefs.h
@@ -7668,6 +7704,10 @@ Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${NEWLIB_HW_FP_TRUE}" && test -z "${NEWLIB_HW_FP_FALSE}"; then
   as_fn_error $? "conditional \"NEWLIB_HW_FP\" was never defined.
+Usually this means the macro was only invoked conditionally." "$LINENO" 5
+fi
+if test -z "${NEWLIB_VECMATH_TRUE}" && test -z "${NEWLIB_VECMATH_FALSE}"; then
+  as_fn_error $? "conditional \"NEWLIB_VECMATH\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${HAVE_SIGNAL_DIR_TRUE}" && test -z "${HAVE_SIGNAL_DIR_FALSE}"; then
