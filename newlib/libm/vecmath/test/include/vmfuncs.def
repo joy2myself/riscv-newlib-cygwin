@@ -1,0 +1,75 @@
+/* vmfuncs.def -- X-macro table of all libvecmath functions under test.
+
+   Shared by the MPFR reference generator and the target runner.
+
+   VMFUNC(id, name, nin, kind, ulp, ref)
+     id   -- stable numeric id (blob file identity)
+     name -- function name; vector entry point is v<name>
+     nin  -- number of double inputs (1 or 2)
+     kind -- VMB_OUT_SINGLE / VMB_OUT_DUAL / VMB_OUT_DUAL_INT
+     ulp  -- accuracy threshold in ulps (all functions: 1.0)
+     ref  -- scalar cross-check expression in terms of a, b (report-only,
+             never a FAIL criterion; the MPFR reference decides).  Use
+             VMREF_NONE where no meaningful scalar analogue exists.
+
+   ids are grouped by function family and must never be renumbered
+   (blobs are keyed by id).  */
+
+#ifndef VMFUNC
+#error "define VMFUNC(id, name, nin, kind, ulp, ref) before including"
+#endif
+
+#ifndef VMREF_NONE
+#define VMREF_NONE (0.0 / 0.0)	/* NaN: cross-check disabled */
+#endif
+
+/* ---- P1: direct-mapped roots ---- */
+VMFUNC(1,  sqrt,     1, SINGLE, 1.0, sqrt(a))
+VMFUNC(2,  rsqrt,    1, SINGLE, 1.0, sc_rsqrt(a))
+VMFUNC(3,  cbrt,     1, SINGLE, 1.0, cbrt(a))
+
+/* ---- P2: exp/log/pow family ---- */
+VMFUNC(4,  exp,      1, SINGLE, 1.0, exp(a))
+VMFUNC(5,  exp2,     1, SINGLE, 1.0, exp2(a))
+VMFUNC(6,  exp10,    1, SINGLE, 1.0, sc_exp10(a))
+VMFUNC(7,  expm1,    1, SINGLE, 1.0, expm1(a))
+VMFUNC(8,  log,      1, SINGLE, 1.0, log(a))
+VMFUNC(9,  log2,     1, SINGLE, 1.0, (log2)(a))
+VMFUNC(10, log10,    1, SINGLE, 1.0, log10(a))
+VMFUNC(11, log1p,    1, SINGLE, 1.0, log1p(a))
+VMFUNC(12, log2p1,   1, SINGLE, 1.0, sc_log2p1(a))
+VMFUNC(13, pow,      2, SINGLE, 1.0, pow(a, b))
+
+/* ---- P3: trigonometric ---- */
+VMFUNC(14, sin,      1, SINGLE, 1.0, sin(a))
+VMFUNC(15, cos,      1, SINGLE, 1.0, cos(a))
+VMFUNC(16, tan,      1, SINGLE, 1.0, tan(a))
+VMFUNC(17, sincos,   1, DUAL,   1.0, VMREF_NONE)
+VMFUNC(18, sinpi,    1, SINGLE, 1.0, sc_sinpi(a))
+VMFUNC(19, cospi,    1, SINGLE, 1.0, sc_cospi(a))
+VMFUNC(20, tanpi,    1, SINGLE, 1.0, sc_tanpi(a))
+VMFUNC(21, sincospi, 1, DUAL,   1.0, VMREF_NONE)
+
+/* ---- P4: inverse trig + hyperbolic ---- */
+VMFUNC(22, asin,     1, SINGLE, 1.0, asin(a))
+VMFUNC(23, acos,     1, SINGLE, 1.0, acos(a))
+VMFUNC(24, atan,     1, SINGLE, 1.0, atan(a))
+VMFUNC(25, atan2,    2, SINGLE, 1.0, atan2(a, b))
+VMFUNC(26, asinpi,   1, SINGLE, 1.0, sc_asinpi(a))
+VMFUNC(27, acospi,   1, SINGLE, 1.0, sc_acospi(a))
+VMFUNC(28, atanpi,   1, SINGLE, 1.0, sc_atanpi(a))
+VMFUNC(29, atan2pi,  2, SINGLE, 1.0, sc_atan2pi(a, b))
+VMFUNC(30, sinh,     1, SINGLE, 1.0, sinh(a))
+VMFUNC(31, cosh,     1, SINGLE, 1.0, cosh(a))
+VMFUNC(32, tanh,     1, SINGLE, 1.0, tanh(a))
+VMFUNC(33, asinh,    1, SINGLE, 1.0, asinh(a))
+VMFUNC(34, acosh,    1, SINGLE, 1.0, acosh(a))
+VMFUNC(35, atanh,    1, SINGLE, 1.0, atanh(a))
+VMFUNC(36, hypot,    2, SINGLE, 1.0, hypot(a, b))
+
+/* ---- P5: dd special functions ---- */
+VMFUNC(37, erf,      1, SINGLE, 1.0, erf(a))
+VMFUNC(38, erfc,     1, SINGLE, 1.0, erfc(a))
+VMFUNC(39, tgamma,   1, SINGLE, 1.0, tgamma(a))
+VMFUNC(40, lgamma,   1, SINGLE, 1.0, lgamma(a))
+VMFUNC(41, lgamma_r, 1, DUAL_INT, 1.0, VMREF_NONE)

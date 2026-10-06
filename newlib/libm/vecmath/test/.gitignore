@@ -1,0 +1,11 @@
+# test build artifacts (regenerate via make)
+/vmgen
+/runner-linux
+/runner-elf
+/runner-elf-int
+/runner-nov
+/vm_crt0.o
+/blobs/
+/shim/
+
+# results/ is NOT ignored: the accuracy reports under it are checked in.

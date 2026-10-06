@@ -1,0 +1,3 @@
+*startfile:
+crt0%O%s
+
