@@ -334,10 +334,11 @@ AC_ARG_ENABLE(newlib-hw-misaligned-access,
  fi], [newlib_hw_misaligned_access=])dnl
 
 dnl Support --enable-vecmath
-dnl Builds libvecmath.a, the RISC-V RVV 1.0 double-precision vector math
-dnl library (array API entries vsin/vexp/..., VFABI aliases and inline
-dnl kernels).  RISC-V targets only; sources degrade to scalar fallbacks
-dnl automatically in multilibs without the V extension.
+dnl Builds libvecmath.a, the RISC-V RVV 1.0 double- and single-precision
+dnl vector math library (array API entries vsin/vexp/... and
+dnl vsinf/vexpf/..., VFABI aliases and inline kernels).  RISC-V targets
+dnl only; sources degrade to scalar fallbacks automatically in multilibs
+dnl without the V extension.
 AC_ARG_ENABLE(vecmath,
 [  --enable-vecmath    build libvecmath.a, the RISC-V RVV vector math library],
 [case "${enableval}" in

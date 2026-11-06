@@ -38,10 +38,26 @@
      log2p1(x) = log2(1+x)   (accurate as x -> 0; never forms 1+x)
      exp10(x)  = 10^x
 
+   Every entry has a single-precision (binary32) variant with the C99
+   naming: vsqrt becomes vsqrtf, taking float arrays.  The binary32
+   entries evaluate through the binary64 kernels -- every binary32 value
+   is a binary64 value, so the widening is exact -- and round once at the
+   end, giving <= 0.5 ulp + 2^-29 ulp in binary32.  This is the same
+   computation newlib's own scalar single-precision functions perform:
+   the Arm optimized-routines ports behind expf, exp2f, logf, log2f,
+   powf, sinf, cosf and sincosf all evaluate in double_t and round once.
+   Accuracy, special values and per-lane exception flags therefore match
+   the binary64 entries one for one.
+
    If VECMATH_WANT_KERNELS is defined and the RVV intrinsics are
    available, <vecmath_rvv.h> is pulled in, exposing the per-lane inline
    kernels __vecmath_<name>_f64m{1,2,4,8}(vfloat64mK_t, vl) for direct use
-   in SIMD code, plus the double-double helpers.  */
+   in SIMD code, plus the double-double helpers.  That layer is
+   binary64-only: the binary32 kernels are internal (libm/vecmath/include/
+   f32/), because an f32mK group widens into 2K binary64 register groups
+   and LMUL 8 would need f64m16.  Hand-written SIMD code that wants a
+   binary32 entry point should call the exported VFABI alias
+   (_ZGV<K>Nxv_<name>f) instead.  */
 
 #ifndef _VECMATH_H_
 #define _VECMATH_H_
@@ -128,6 +144,74 @@ void vlgamma (double *__restrict y, const double *__restrict x, size_t n);
    (+1/-1) into sign[].  No signgam global is ever touched.  */
 void vlgamma_r (double *__restrict y, int *__restrict sign,
 		const double *__restrict x, size_t n);
+
+/* ---- single precision (binary32) variants -------------------------
+   Same contract, same special values, same per-lane exception flags;
+   see the header comment above.  */
+
+/* ---- trigonometric ---- */
+void vsinf (float *__restrict y, const float *__restrict x, size_t n);
+void vcosf (float *__restrict y, const float *__restrict x, size_t n);
+void vtanf (float *__restrict y, const float *__restrict x, size_t n);
+void vsincosf (float *__restrict sy, float *__restrict cy,
+	       const float *__restrict x, size_t n);
+
+/* ---- pi-scaled trigonometric (SYCL) ---- */
+void vsinpif (float *__restrict y, const float *__restrict x, size_t n);
+void vcospif (float *__restrict y, const float *__restrict x, size_t n);
+void vtanpif (float *__restrict y, const float *__restrict x, size_t n);
+void vsincospif (float *__restrict sy, float *__restrict cy,
+		 const float *__restrict x, size_t n);
+
+/* ---- inverse trigonometric ---- */
+void vasinf (float *__restrict y, const float *__restrict x, size_t n);
+void vacosf (float *__restrict y, const float *__restrict x, size_t n);
+void vatanf (float *__restrict y, const float *__restrict x, size_t n);
+void vatan2f (float *__restrict y, const float *__restrict ay,
+	      const float *__restrict ax, size_t n);
+
+/* ---- pi-scaled inverse trigonometric (SYCL) ---- */
+void vasinpif (float *__restrict y, const float *__restrict x, size_t n);
+void vacospif (float *__restrict y, const float *__restrict x, size_t n);
+void vatanpif (float *__restrict y, const float *__restrict x, size_t n);
+void vatan2pif (float *__restrict y, const float *__restrict ay,
+		const float *__restrict ax, size_t n);
+
+/* ---- hyperbolic ---- */
+void vsinhf (float *__restrict y, const float *__restrict x, size_t n);
+void vcoshf (float *__restrict y, const float *__restrict x, size_t n);
+void vtanhf (float *__restrict y, const float *__restrict x, size_t n);
+void vasinhf (float *__restrict y, const float *__restrict x, size_t n);
+void vacoshf (float *__restrict y, const float *__restrict x, size_t n);
+void vatanhf (float *__restrict y, const float *__restrict x, size_t n);
+
+/* ---- exponential / logarithmic ---- */
+void vexpf (float *__restrict y, const float *__restrict x, size_t n);
+void vexp2f (float *__restrict y, const float *__restrict x, size_t n);
+void vexp10f (float *__restrict y, const float *__restrict x, size_t n);
+void vexpm1f (float *__restrict y, const float *__restrict x, size_t n);
+void vlogf (float *__restrict y, const float *__restrict x, size_t n);
+void vlog2f (float *__restrict y, const float *__restrict x, size_t n);
+void vlog10f (float *__restrict y, const float *__restrict x, size_t n);
+void vlog1pf (float *__restrict y, const float *__restrict x, size_t n);
+void vlog2p1f (float *__restrict y, const float *__restrict x, size_t n);
+
+/* ---- power / root ---- */
+void vpowf (float *__restrict y, const float *__restrict ax,
+	    const float *__restrict bx, size_t n);
+void vsqrtf (float *__restrict y, const float *__restrict x, size_t n);
+void vrsqrtf (float *__restrict y, const float *__restrict x, size_t n);
+void vcbrtf (float *__restrict y, const float *__restrict x, size_t n);
+void vhypotf (float *__restrict y, const float *__restrict ax,
+	      const float *__restrict bx, size_t n);
+
+/* ---- special functions ---- */
+void verff (float *__restrict y, const float *__restrict x, size_t n);
+void verfcf (float *__restrict y, const float *__restrict x, size_t n);
+void vtgammaf (float *__restrict y, const float *__restrict x, size_t n);
+void vlgammaf (float *__restrict y, const float *__restrict x, size_t n);
+void vlgamma_rf (float *__restrict y, int *__restrict sign,
+		 const float *__restrict x, size_t n);
 
 #ifdef __cplusplus
 }

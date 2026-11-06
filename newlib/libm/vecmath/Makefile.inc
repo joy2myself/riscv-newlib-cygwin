@@ -18,6 +18,18 @@
 	%D%/vgamma.c \
 	%D%/vfallback.c \
 	%D%/vfabi.c \
+	%D%/vf_misc.c \
+	%D%/vf_exp.c \
+	%D%/vf_log.c \
+	%D%/vf_pow.c \
+	%D%/vf_trig.c \
+	%D%/vf_invtrig.c \
+	%D%/vf_hyper.c \
+	%D%/vf_hyperinv.c \
+	%D%/vf_erf.c \
+	%D%/vf_gamma.c \
+	%D%/vf_fallback.c \
+	%D%/vfabi32.c \
 	%D%/tables/vm_exp_data.c \
 	%D%/tables/vm_log_data.c \
 	%D%/tables/vm_log2_data.c \

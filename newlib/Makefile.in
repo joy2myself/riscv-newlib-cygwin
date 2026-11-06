@@ -3813,6 +3813,18 @@ libvecmath_a_LIBADD =
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vgamma.$(OBJEXT) \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vfallback.$(OBJEXT) \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vfabi.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_misc.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_exp.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_log.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_pow.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_trig.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_invtrig.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_hyper.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_hyperinv.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_erf.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_gamma.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vf_fallback.$(OBJEXT) \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/libvecmath_a-vfabi32.$(OBJEXT) \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/tables/libvecmath_a-vm_exp_data.$(OBJEXT) \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/tables/libvecmath_a-vm_log_data.$(OBJEXT) \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/tables/libvecmath_a-vm_log2_data.$(OBJEXT) \
@@ -5019,6 +5031,18 @@ libm_a_CFLAGS_libm_common = -fbuiltin -fno-math-errno
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/vgamma.c \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/vfallback.c \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/vfabi.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_misc.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_exp.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_log.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_pow.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_trig.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_invtrig.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_hyper.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_hyperinv.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_erf.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_gamma.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vf_fallback.c \
+@NEWLIB_VECMATH_TRUE@	libm/vecmath/vfabi32.c \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/tables/vm_exp_data.c \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/tables/vm_log_data.c \
 @NEWLIB_VECMATH_TRUE@	libm/vecmath/tables/vm_log2_data.c \
@@ -12684,6 +12708,42 @@ libm/vecmath/libvecmath_a-vfallback.$(OBJEXT):  \
 libm/vecmath/libvecmath_a-vfabi.$(OBJEXT):  \
 	libm/vecmath/$(am__dirstamp) \
 	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_misc.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_exp.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_log.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_pow.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_trig.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_invtrig.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_hyper.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_hyperinv.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_erf.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_gamma.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vf_fallback.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
+libm/vecmath/libvecmath_a-vfabi32.$(OBJEXT):  \
+	libm/vecmath/$(am__dirstamp) \
+	libm/vecmath/$(DEPDIR)/$(am__dirstamp)
 libm/vecmath/tables/$(am__dirstamp):
 	@$(MKDIR_P) libm/vecmath/tables
 	@: > libm/vecmath/tables/$(am__dirstamp)
@@ -15601,7 +15661,19 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-verf.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vexp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vexpm1.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_erf.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_exp.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_fallback.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_gamma.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyper.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyperinv.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_invtrig.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_log.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_misc.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_pow.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vf_trig.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vfabi.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vfabi32.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vfallback.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vgamma.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@libm/vecmath/$(DEPDIR)/libvecmath_a-vhyper.Po@am__quote@
@@ -51026,6 +51098,174 @@ libm/vecmath/libvecmath_a-vfabi.obj: libm/vecmath/vfabi.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vfabi.c' object='libm/vecmath/libvecmath_a-vfabi.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vfabi.obj `if test -f 'libm/vecmath/vfabi.c'; then $(CYGPATH_W) 'libm/vecmath/vfabi.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vfabi.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_misc.o: libm/vecmath/vf_misc.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_misc.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_misc.Tpo -c -o libm/vecmath/libvecmath_a-vf_misc.o `test -f 'libm/vecmath/vf_misc.c' || echo '$(srcdir)/'`libm/vecmath/vf_misc.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_misc.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_misc.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_misc.c' object='libm/vecmath/libvecmath_a-vf_misc.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_misc.o `test -f 'libm/vecmath/vf_misc.c' || echo '$(srcdir)/'`libm/vecmath/vf_misc.c
+
+libm/vecmath/libvecmath_a-vf_misc.obj: libm/vecmath/vf_misc.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_misc.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_misc.Tpo -c -o libm/vecmath/libvecmath_a-vf_misc.obj `if test -f 'libm/vecmath/vf_misc.c'; then $(CYGPATH_W) 'libm/vecmath/vf_misc.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_misc.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_misc.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_misc.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_misc.c' object='libm/vecmath/libvecmath_a-vf_misc.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_misc.obj `if test -f 'libm/vecmath/vf_misc.c'; then $(CYGPATH_W) 'libm/vecmath/vf_misc.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_misc.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_exp.o: libm/vecmath/vf_exp.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_exp.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_exp.Tpo -c -o libm/vecmath/libvecmath_a-vf_exp.o `test -f 'libm/vecmath/vf_exp.c' || echo '$(srcdir)/'`libm/vecmath/vf_exp.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_exp.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_exp.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_exp.c' object='libm/vecmath/libvecmath_a-vf_exp.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_exp.o `test -f 'libm/vecmath/vf_exp.c' || echo '$(srcdir)/'`libm/vecmath/vf_exp.c
+
+libm/vecmath/libvecmath_a-vf_exp.obj: libm/vecmath/vf_exp.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_exp.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_exp.Tpo -c -o libm/vecmath/libvecmath_a-vf_exp.obj `if test -f 'libm/vecmath/vf_exp.c'; then $(CYGPATH_W) 'libm/vecmath/vf_exp.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_exp.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_exp.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_exp.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_exp.c' object='libm/vecmath/libvecmath_a-vf_exp.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_exp.obj `if test -f 'libm/vecmath/vf_exp.c'; then $(CYGPATH_W) 'libm/vecmath/vf_exp.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_exp.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_log.o: libm/vecmath/vf_log.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_log.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_log.Tpo -c -o libm/vecmath/libvecmath_a-vf_log.o `test -f 'libm/vecmath/vf_log.c' || echo '$(srcdir)/'`libm/vecmath/vf_log.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_log.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_log.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_log.c' object='libm/vecmath/libvecmath_a-vf_log.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_log.o `test -f 'libm/vecmath/vf_log.c' || echo '$(srcdir)/'`libm/vecmath/vf_log.c
+
+libm/vecmath/libvecmath_a-vf_log.obj: libm/vecmath/vf_log.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_log.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_log.Tpo -c -o libm/vecmath/libvecmath_a-vf_log.obj `if test -f 'libm/vecmath/vf_log.c'; then $(CYGPATH_W) 'libm/vecmath/vf_log.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_log.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_log.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_log.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_log.c' object='libm/vecmath/libvecmath_a-vf_log.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_log.obj `if test -f 'libm/vecmath/vf_log.c'; then $(CYGPATH_W) 'libm/vecmath/vf_log.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_log.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_pow.o: libm/vecmath/vf_pow.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_pow.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_pow.Tpo -c -o libm/vecmath/libvecmath_a-vf_pow.o `test -f 'libm/vecmath/vf_pow.c' || echo '$(srcdir)/'`libm/vecmath/vf_pow.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_pow.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_pow.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_pow.c' object='libm/vecmath/libvecmath_a-vf_pow.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_pow.o `test -f 'libm/vecmath/vf_pow.c' || echo '$(srcdir)/'`libm/vecmath/vf_pow.c
+
+libm/vecmath/libvecmath_a-vf_pow.obj: libm/vecmath/vf_pow.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_pow.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_pow.Tpo -c -o libm/vecmath/libvecmath_a-vf_pow.obj `if test -f 'libm/vecmath/vf_pow.c'; then $(CYGPATH_W) 'libm/vecmath/vf_pow.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_pow.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_pow.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_pow.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_pow.c' object='libm/vecmath/libvecmath_a-vf_pow.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_pow.obj `if test -f 'libm/vecmath/vf_pow.c'; then $(CYGPATH_W) 'libm/vecmath/vf_pow.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_pow.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_trig.o: libm/vecmath/vf_trig.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_trig.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_trig.Tpo -c -o libm/vecmath/libvecmath_a-vf_trig.o `test -f 'libm/vecmath/vf_trig.c' || echo '$(srcdir)/'`libm/vecmath/vf_trig.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_trig.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_trig.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_trig.c' object='libm/vecmath/libvecmath_a-vf_trig.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_trig.o `test -f 'libm/vecmath/vf_trig.c' || echo '$(srcdir)/'`libm/vecmath/vf_trig.c
+
+libm/vecmath/libvecmath_a-vf_trig.obj: libm/vecmath/vf_trig.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_trig.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_trig.Tpo -c -o libm/vecmath/libvecmath_a-vf_trig.obj `if test -f 'libm/vecmath/vf_trig.c'; then $(CYGPATH_W) 'libm/vecmath/vf_trig.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_trig.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_trig.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_trig.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_trig.c' object='libm/vecmath/libvecmath_a-vf_trig.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_trig.obj `if test -f 'libm/vecmath/vf_trig.c'; then $(CYGPATH_W) 'libm/vecmath/vf_trig.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_trig.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_invtrig.o: libm/vecmath/vf_invtrig.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_invtrig.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_invtrig.Tpo -c -o libm/vecmath/libvecmath_a-vf_invtrig.o `test -f 'libm/vecmath/vf_invtrig.c' || echo '$(srcdir)/'`libm/vecmath/vf_invtrig.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_invtrig.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_invtrig.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_invtrig.c' object='libm/vecmath/libvecmath_a-vf_invtrig.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_invtrig.o `test -f 'libm/vecmath/vf_invtrig.c' || echo '$(srcdir)/'`libm/vecmath/vf_invtrig.c
+
+libm/vecmath/libvecmath_a-vf_invtrig.obj: libm/vecmath/vf_invtrig.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_invtrig.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_invtrig.Tpo -c -o libm/vecmath/libvecmath_a-vf_invtrig.obj `if test -f 'libm/vecmath/vf_invtrig.c'; then $(CYGPATH_W) 'libm/vecmath/vf_invtrig.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_invtrig.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_invtrig.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_invtrig.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_invtrig.c' object='libm/vecmath/libvecmath_a-vf_invtrig.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_invtrig.obj `if test -f 'libm/vecmath/vf_invtrig.c'; then $(CYGPATH_W) 'libm/vecmath/vf_invtrig.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_invtrig.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_hyper.o: libm/vecmath/vf_hyper.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_hyper.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyper.Tpo -c -o libm/vecmath/libvecmath_a-vf_hyper.o `test -f 'libm/vecmath/vf_hyper.c' || echo '$(srcdir)/'`libm/vecmath/vf_hyper.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyper.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyper.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_hyper.c' object='libm/vecmath/libvecmath_a-vf_hyper.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_hyper.o `test -f 'libm/vecmath/vf_hyper.c' || echo '$(srcdir)/'`libm/vecmath/vf_hyper.c
+
+libm/vecmath/libvecmath_a-vf_hyper.obj: libm/vecmath/vf_hyper.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_hyper.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyper.Tpo -c -o libm/vecmath/libvecmath_a-vf_hyper.obj `if test -f 'libm/vecmath/vf_hyper.c'; then $(CYGPATH_W) 'libm/vecmath/vf_hyper.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_hyper.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyper.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyper.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_hyper.c' object='libm/vecmath/libvecmath_a-vf_hyper.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_hyper.obj `if test -f 'libm/vecmath/vf_hyper.c'; then $(CYGPATH_W) 'libm/vecmath/vf_hyper.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_hyper.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_hyperinv.o: libm/vecmath/vf_hyperinv.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_hyperinv.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyperinv.Tpo -c -o libm/vecmath/libvecmath_a-vf_hyperinv.o `test -f 'libm/vecmath/vf_hyperinv.c' || echo '$(srcdir)/'`libm/vecmath/vf_hyperinv.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyperinv.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyperinv.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_hyperinv.c' object='libm/vecmath/libvecmath_a-vf_hyperinv.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_hyperinv.o `test -f 'libm/vecmath/vf_hyperinv.c' || echo '$(srcdir)/'`libm/vecmath/vf_hyperinv.c
+
+libm/vecmath/libvecmath_a-vf_hyperinv.obj: libm/vecmath/vf_hyperinv.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_hyperinv.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyperinv.Tpo -c -o libm/vecmath/libvecmath_a-vf_hyperinv.obj `if test -f 'libm/vecmath/vf_hyperinv.c'; then $(CYGPATH_W) 'libm/vecmath/vf_hyperinv.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_hyperinv.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyperinv.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_hyperinv.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_hyperinv.c' object='libm/vecmath/libvecmath_a-vf_hyperinv.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_hyperinv.obj `if test -f 'libm/vecmath/vf_hyperinv.c'; then $(CYGPATH_W) 'libm/vecmath/vf_hyperinv.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_hyperinv.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_erf.o: libm/vecmath/vf_erf.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_erf.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_erf.Tpo -c -o libm/vecmath/libvecmath_a-vf_erf.o `test -f 'libm/vecmath/vf_erf.c' || echo '$(srcdir)/'`libm/vecmath/vf_erf.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_erf.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_erf.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_erf.c' object='libm/vecmath/libvecmath_a-vf_erf.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_erf.o `test -f 'libm/vecmath/vf_erf.c' || echo '$(srcdir)/'`libm/vecmath/vf_erf.c
+
+libm/vecmath/libvecmath_a-vf_erf.obj: libm/vecmath/vf_erf.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_erf.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_erf.Tpo -c -o libm/vecmath/libvecmath_a-vf_erf.obj `if test -f 'libm/vecmath/vf_erf.c'; then $(CYGPATH_W) 'libm/vecmath/vf_erf.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_erf.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_erf.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_erf.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_erf.c' object='libm/vecmath/libvecmath_a-vf_erf.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_erf.obj `if test -f 'libm/vecmath/vf_erf.c'; then $(CYGPATH_W) 'libm/vecmath/vf_erf.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_erf.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_gamma.o: libm/vecmath/vf_gamma.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_gamma.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_gamma.Tpo -c -o libm/vecmath/libvecmath_a-vf_gamma.o `test -f 'libm/vecmath/vf_gamma.c' || echo '$(srcdir)/'`libm/vecmath/vf_gamma.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_gamma.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_gamma.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_gamma.c' object='libm/vecmath/libvecmath_a-vf_gamma.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_gamma.o `test -f 'libm/vecmath/vf_gamma.c' || echo '$(srcdir)/'`libm/vecmath/vf_gamma.c
+
+libm/vecmath/libvecmath_a-vf_gamma.obj: libm/vecmath/vf_gamma.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_gamma.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_gamma.Tpo -c -o libm/vecmath/libvecmath_a-vf_gamma.obj `if test -f 'libm/vecmath/vf_gamma.c'; then $(CYGPATH_W) 'libm/vecmath/vf_gamma.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_gamma.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_gamma.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_gamma.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_gamma.c' object='libm/vecmath/libvecmath_a-vf_gamma.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_gamma.obj `if test -f 'libm/vecmath/vf_gamma.c'; then $(CYGPATH_W) 'libm/vecmath/vf_gamma.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_gamma.c'; fi`
+
+libm/vecmath/libvecmath_a-vf_fallback.o: libm/vecmath/vf_fallback.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_fallback.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_fallback.Tpo -c -o libm/vecmath/libvecmath_a-vf_fallback.o `test -f 'libm/vecmath/vf_fallback.c' || echo '$(srcdir)/'`libm/vecmath/vf_fallback.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_fallback.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_fallback.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_fallback.c' object='libm/vecmath/libvecmath_a-vf_fallback.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_fallback.o `test -f 'libm/vecmath/vf_fallback.c' || echo '$(srcdir)/'`libm/vecmath/vf_fallback.c
+
+libm/vecmath/libvecmath_a-vf_fallback.obj: libm/vecmath/vf_fallback.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vf_fallback.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vf_fallback.Tpo -c -o libm/vecmath/libvecmath_a-vf_fallback.obj `if test -f 'libm/vecmath/vf_fallback.c'; then $(CYGPATH_W) 'libm/vecmath/vf_fallback.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_fallback.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vf_fallback.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vf_fallback.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vf_fallback.c' object='libm/vecmath/libvecmath_a-vf_fallback.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vf_fallback.obj `if test -f 'libm/vecmath/vf_fallback.c'; then $(CYGPATH_W) 'libm/vecmath/vf_fallback.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vf_fallback.c'; fi`
+
+libm/vecmath/libvecmath_a-vfabi32.o: libm/vecmath/vfabi32.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vfabi32.o -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vfabi32.Tpo -c -o libm/vecmath/libvecmath_a-vfabi32.o `test -f 'libm/vecmath/vfabi32.c' || echo '$(srcdir)/'`libm/vecmath/vfabi32.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vfabi32.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vfabi32.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vfabi32.c' object='libm/vecmath/libvecmath_a-vfabi32.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vfabi32.o `test -f 'libm/vecmath/vfabi32.c' || echo '$(srcdir)/'`libm/vecmath/vfabi32.c
+
+libm/vecmath/libvecmath_a-vfabi32.obj: libm/vecmath/vfabi32.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/libvecmath_a-vfabi32.obj -MD -MP -MF libm/vecmath/$(DEPDIR)/libvecmath_a-vfabi32.Tpo -c -o libm/vecmath/libvecmath_a-vfabi32.obj `if test -f 'libm/vecmath/vfabi32.c'; then $(CYGPATH_W) 'libm/vecmath/vfabi32.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vfabi32.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libm/vecmath/$(DEPDIR)/libvecmath_a-vfabi32.Tpo libm/vecmath/$(DEPDIR)/libvecmath_a-vfabi32.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libm/vecmath/vfabi32.c' object='libm/vecmath/libvecmath_a-vfabi32.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -c -o libm/vecmath/libvecmath_a-vfabi32.obj `if test -f 'libm/vecmath/vfabi32.c'; then $(CYGPATH_W) 'libm/vecmath/vfabi32.c'; else $(CYGPATH_W) '$(srcdir)/libm/vecmath/vfabi32.c'; fi`
 
 libm/vecmath/tables/libvecmath_a-vm_exp_data.o: libm/vecmath/tables/vm_exp_data.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libvecmath_a_CPPFLAGS) $(CPPFLAGS) $(libvecmath_a_CFLAGS) $(CFLAGS) -MT libm/vecmath/tables/libvecmath_a-vm_exp_data.o -MD -MP -MF libm/vecmath/tables/$(DEPDIR)/libvecmath_a-vm_exp_data.Tpo -c -o libm/vecmath/tables/libvecmath_a-vm_exp_data.o `test -f 'libm/vecmath/tables/vm_exp_data.c' || echo '$(srcdir)/'`libm/vecmath/tables/vm_exp_data.c
