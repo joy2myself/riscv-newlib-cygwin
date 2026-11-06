@@ -48,6 +48,7 @@ _Static_assert (FE_INEXACT == VMB_F_INEXACT, "FE_INEXACT mismatch");
 typedef struct {
   const char *name;
   int id, nin, kind;
+  int prec;			/* 64 (binary64) or 32 (binary32) */
   double ulp;
 } fdesc_t;
 
@@ -58,44 +59,56 @@ typedef struct {
 #define VMKN_DUAL VMB_OUT_DUAL
 #define VMKN_DUAL_INT VMB_OUT_DUAL_INT
 
+/* precision tokens likewise: F64/F32 -> 64/32. */
+#define VMPR_C(a, b) a##b
+#define VMPR(k) VMPR_C(VMPR_, k)
+#define VMPR_F64 64
+#define VMPR_F32 32
+
 static const fdesc_t fdesc[] = {
-#define VMFUNC(id, name, nin, kind, ulp, ref) [id] = { #name, id, nin, VMKN(kind), ulp },
+#define VMFUNC(id, name, nin, kind, prec, ulp, ref) \
+  [id] = { #name, id, nin, VMKN(kind), VMPR(prec), ulp },
 #include "vmfuncs.def"
 #undef VMFUNC
 };
 #define NFUNC ((int)(sizeof (fdesc) / sizeof (fdesc[0])))
 
 enum {
-#define VMFUNC(id, name, nin, kind, ulp, ref) FID_##name = id,
+#define VMFUNC(id, name, nin, kind, prec, ulp, ref) FID_##name = id,
 #include "vmfuncs.def"
 #undef VMFUNC
 };
 
 /* Weak references to the vector entries: functions not present in the
-   library under test resolve to NULL and are reported as SKIP.  */
-#define VM_WU1(ID, NAME) \
-  extern __attribute__ ((weak)) void v##NAME (double *, const double *, size_t);
-#define VM_WB1(ID, NAME) \
-  extern __attribute__ ((weak)) void v##NAME (double *, const double *, \
-					      const double *, size_t);
-#define VM_WD1(ID, NAME) \
-  extern __attribute__ ((weak)) void v##NAME (double *, double *, \
-					      const double *, size_t);
-#define VM_WDI(ID, NAME) \
-  extern __attribute__ ((weak)) void v##NAME (double *, int *, \
-					      const double *, size_t);
-#define VM_W_1_SINGLE(ID, NAME)	   VM_WU1 (ID, NAME)
-#define VM_W_2_SINGLE(ID, NAME)	   VM_WB1 (ID, NAME)
-#define VM_W_1_DUAL(ID, NAME)	   VM_WD1 (ID, NAME)
-#define VM_W_1_DUAL_INT(ID, NAME)  VM_WDI (ID, NAME)
+   library under test resolve to NULL and are reported as SKIP.  T is the
+   element type: double for F64 rows, float for F32 rows.  */
+#define VM_WU1(ID, NAME, T) \
+  extern __attribute__ ((weak)) void v##NAME (T *, const T *, size_t);
+#define VM_WB1(ID, NAME, T) \
+  extern __attribute__ ((weak)) void v##NAME (T *, const T *, \
+					      const T *, size_t);
+#define VM_WD1(ID, NAME, T) \
+  extern __attribute__ ((weak)) void v##NAME (T *, T *, \
+					      const T *, size_t);
+#define VM_WDI(ID, NAME, T) \
+  extern __attribute__ ((weak)) void v##NAME (T *, int *, \
+					      const T *, size_t);
+#define VM_W_1_SINGLE_F64(ID, NAME)	 VM_WU1 (ID, NAME, double)
+#define VM_W_1_SINGLE_F32(ID, NAME)	 VM_WU1 (ID, NAME, float)
+#define VM_W_2_SINGLE_F64(ID, NAME)	 VM_WB1 (ID, NAME, double)
+#define VM_W_2_SINGLE_F32(ID, NAME)	 VM_WB1 (ID, NAME, float)
+#define VM_W_1_DUAL_F64(ID, NAME)	 VM_WD1 (ID, NAME, double)
+#define VM_W_1_DUAL_F32(ID, NAME)	 VM_WD1 (ID, NAME, float)
+#define VM_W_1_DUAL_INT_F64(ID, NAME)	 VM_WDI (ID, NAME, double)
+#define VM_W_1_DUAL_INT_F32(ID, NAME)	 VM_WDI (ID, NAME, float)
 
-/* nin/kind sit textually adjacent to ## in VMFUNC's replacement list, so
-   they are substituted RAW (kind is a bare word anyway); VMEXPAND then
-   re-expands the pasted selector name so it runs.  */
+/* nin/kind/prec sit textually adjacent to ## in VMFUNC's replacement list,
+   so they are substituted RAW (kind/prec are bare words anyway); VMEXPAND
+   then re-expands the pasted selector name so it runs.  */
 #define VMEXPAND(f, a, b) f (a, b)
 
-#define VMFUNC(id, name, nin, kind, ulp, ref) \
-  VMEXPAND (VM_W_##nin##_##kind, id, name)
+#define VMFUNC(id, name, nin, kind, prec, ulp, ref) \
+  VMEXPAND (VM_W_##nin##_##kind##_##prec, id, name)
 #include "vmfuncs.def"
 #undef VMFUNC
 
@@ -115,12 +128,30 @@ static double sc_acospi (double a) { return acos (a) / M_PI; }
 static double sc_atanpi (double a) { return atan (a) / M_PI; }
 static double sc_atan2pi (double a, double b) { return atan2 (a, b) / M_PI; }
 
+/* binary32 mirrors of the above (float arithmetic and constants).  */
+#define VM_PIF 3.14159265358979323846f
+static float sc_rsqrtf (float a) { return a == 0.0f ? HUGE_VALF : 1.0f / sqrtf (a); }
+static float sc_exp10f (float a) { return exp10f (a); }
+static float sc_log2p1f (float a)
+{
+  float t = log1pf (a);
+  return fmaf (t, 1.44269504088896338700e+00f,
+	       t * 2.03552737409310331110e-17f);
+}
+static float sc_sinpif (float a) { return sinf (VM_PIF * a); }
+static float sc_cospif (float a) { return cosf (VM_PIF * a); }
+static float sc_tanpif (float a) { return tanf (VM_PIF * a); }
+static float sc_asinpif (float a) { return asinf (a) / VM_PIF; }
+static float sc_acospif (float a) { return acosf (a) / VM_PIF; }
+static float sc_atanpif (float a) { return atanf (a) / VM_PIF; }
+static float sc_atan2pif (float a, float b) { return atan2f (a, b) / VM_PIF; }
+
 static double
 scalar_ref (int id, double a, double b)
 {
   switch (id)
     {
-#define VMFUNC(id_, name, nin, kind, ulp, ref) case id_: return (ref);
+#define VMFUNC(id_, name, nin, kind, prec, ulp, ref) case id_: return (ref);
 #include "vmfuncs.def"
 #undef VMFUNC
     default:
@@ -137,6 +168,9 @@ has_cross (int id)
     case FID_sincos:
     case FID_sincospi:
     case FID_lgamma_r:
+    case FID_sincosf:
+    case FID_sincospif:
+    case FID_lgamma_rf:
       return 0;
     default:
       return 1;
@@ -151,27 +185,36 @@ dcmp (const void *p, const void *q)
   return (a > b) - (a < b);
 }
 
-/* Dispatch table over the same X-macro.  */
+/* Dispatch table over the same X-macro.  Buffers are passed as void *
+   and cast to the element type selected by the precision token; the sign
+   array stays int.  */
 static int
-vec_call (int id, double *y, double *y2, int *sgn,
-	  const double *x, const double *x2, size_t n)
+vec_call (int id, void *y, void *y2, int *sgn,
+	  const void *x, const void *x2, size_t n)
 {
   switch (id)
     {
-#define VM_CU1(ID, NAME) \
-  case ID: if (!v##NAME) return -1; v##NAME (y, x, n); break;
-#define VM_CB1(ID, NAME) \
-  case ID: if (!v##NAME) return -1; v##NAME (y, x, x2, n); break;
-#define VM_CD1(ID, NAME) \
-  case ID: if (!v##NAME) return -1; v##NAME (y, y2, x, n); break;
-#define VM_CDI(ID, NAME) \
-  case ID: if (!v##NAME) return -1; v##NAME (y, sgn, x, n); break;
-#define VM_GEN_1_SINGLE(ID, NAME)   VM_CU1 (ID, NAME)
-#define VM_GEN_2_SINGLE(ID, NAME)   VM_CB1 (ID, NAME)
-#define VM_GEN_1_DUAL(ID, NAME)	    VM_CD1 (ID, NAME)
-#define VM_GEN_1_DUAL_INT(ID, NAME) VM_CDI (ID, NAME)
-#define VMFUNC(id, name, nin, kind, ulp, ref) \
-  VMEXPAND (VM_GEN_##nin##_##kind, id, name)
+#define VM_CU1(ID, NAME, T) \
+  case ID: if (!v##NAME) return -1; v##NAME ((T *) y, (const T *) x, n); break;
+#define VM_CB1(ID, NAME, T) \
+  case ID: if (!v##NAME) return -1; \
+    v##NAME ((T *) y, (const T *) x, (const T *) x2, n); break;
+#define VM_CD1(ID, NAME, T) \
+  case ID: if (!v##NAME) return -1; \
+    v##NAME ((T *) y, (T *) y2, (const T *) x, n); break;
+#define VM_CDI(ID, NAME, T) \
+  case ID: if (!v##NAME) return -1; \
+    v##NAME ((T *) y, sgn, (const T *) x, n); break;
+#define VM_GEN_1_SINGLE_F64(ID, NAME)	 VM_CU1 (ID, NAME, double)
+#define VM_GEN_1_SINGLE_F32(ID, NAME)	 VM_CU1 (ID, NAME, float)
+#define VM_GEN_2_SINGLE_F64(ID, NAME)	 VM_CB1 (ID, NAME, double)
+#define VM_GEN_2_SINGLE_F32(ID, NAME)	 VM_CB1 (ID, NAME, float)
+#define VM_GEN_1_DUAL_F64(ID, NAME)	 VM_CD1 (ID, NAME, double)
+#define VM_GEN_1_DUAL_F32(ID, NAME)	 VM_CD1 (ID, NAME, float)
+#define VM_GEN_1_DUAL_INT_F64(ID, NAME)	 VM_CDI (ID, NAME, double)
+#define VM_GEN_1_DUAL_INT_F32(ID, NAME)	 VM_CDI (ID, NAME, float)
+#define VMFUNC(id, name, nin, kind, prec, ulp, ref) \
+  VMEXPAND (VM_GEN_##nin##_##kind##_##prec, id, name)
 #include "vmfuncs.def"
 #undef VMFUNC
     default:
@@ -191,11 +234,23 @@ vlen_doubles_m1 (void)
 {
   return __riscv_vsetvlmax_e64m1 ();
 }
+
+static size_t
+vlen_floats_m1 (void)
+{
+  return __riscv_vsetvlmax_e32m1 ();
+}
 #else
 static size_t
 vlen_doubles_m1 (void)
 {
   return 2;			/* scalar-fallback build: synthetic small L */
+}
+
+static size_t
+vlen_floats_m1 (void)
+{
+  return 4;			/* scalar-fallback build: synthetic small L */
 }
 #endif
 
@@ -206,7 +261,8 @@ vlen_doubles_m1 (void)
 typedef struct {
   vmb_hdr_t hdr;
   void *recs;			/* nrec * rec_size bytes */
-  double *a, *b;		/* unpacked inputs */
+  void *a, *b;			/* unpacked inputs: double[] or float[] */
+  int esz;			/* element size: 8 (F64) or 4 (F32) */
 } blob_t;
 
 static int
@@ -236,14 +292,19 @@ blob_load (const char *dir, const fdesc_t *f, blob_t *bl)
     }
   fclose (fp);
 
-  bl->a = malloc (bl->hdr.nrec * sizeof (double) + 64);
-  bl->b = malloc (bl->hdr.nrec * sizeof (double) + 64);
+  /* reserved[0] selects the record precision; both paths unpack the low
+     bits of in0/in1 into a typed input array (binary32 values live in the
+     low 32 bits of each field, see vmblob.h).  */
+  bl->esz = bl->hdr.reserved[0] == VMB_PREC_F32 ? 4 : 8;
+  size_t asz = (size_t) bl->hdr.nrec * bl->esz + 64;
+  bl->a = malloc (asz);
+  bl->b = malloc (asz);
   for (uint64_t i = 0; i < bl->hdr.nrec; i++)
     {
       const vmb_rec1_t *r = (const vmb_rec1_t *)
 	((const char *) bl->recs + i * bl->hdr.rec_size);
-      memcpy (&bl->a[i], &r->in0, 8);
-      memcpy (&bl->b[i], &r->in1, 8);
+      memcpy ((char *) bl->a + i * bl->esz, &r->in0, bl->esz);
+      memcpy ((char *) bl->b + i * bl->esz, &r->in1, bl->esz);
     }
   return 1;
 }
@@ -298,8 +359,101 @@ worst_init (worst_t *w)
 /* Per-function test                                                   */
 /* ------------------------------------------------------------------ */
 
-#define CANARY 0xa55a5aa5a55a5aa5ULL
-#define GUARD 8			/* guard doubles around output buffers */
+#define CANARY64 0xa55a5aa5a55a5aa5ULL
+#define CANARY32 0xa55a5aa5u
+#define GUARD 8			/* guard elements around output buffers */
+
+/* Element-typed access.  All buffer indexing goes through these so that
+   binary64 (8-byte) and binary32 (4-byte) buffers share one code path;
+   memcpy keeps them free of alignment and aliasing assumptions.  */
+
+static void
+canary_put (void *base, uint64_t i, int esz)
+{
+  if (esz == 4)
+    {
+      uint32_t c = CANARY32;
+      memcpy ((char *) base + i * 4, &c, 4);
+    }
+  else
+    {
+      uint64_t c = CANARY64;
+      memcpy ((char *) base + i * 8, &c, 8);
+    }
+}
+
+static int
+canary_ok (const void *base, uint64_t i, int esz)
+{
+  if (esz == 4)
+    {
+      uint32_t c;
+      memcpy (&c, (const char *) base + i * 4, 4);
+      return c == CANARY32;
+    }
+  uint64_t c;
+  memcpy (&c, (const char *) base + i * 8, 8);
+  return c == CANARY64;
+}
+
+static uint64_t
+elem_bits (const void *base, uint64_t i, int esz)
+{
+  if (esz == 4)
+    {
+      uint32_t w;
+      memcpy (&w, (const char *) base + i * 4, 4);
+      return (uint64_t) w;
+    }
+  uint64_t w;
+  memcpy (&w, (const char *) base + i * 8, 8);
+  return w;
+}
+
+static double
+elem_double (const void *base, uint64_t i, int esz)
+{
+  if (esz == 4)
+    {
+      float f;
+      memcpy (&f, (const char *) base + i * 4, 4);
+      return (double) f;
+    }
+  double d;
+  memcpy (&d, (const char *) base + i * 8, 8);
+  return d;
+}
+
+/* Accuracy verdict for output 1: the single-output record r, or the first
+   output of the dual record r2 (whose expectation lives in exp1).  */
+static ulp_verdict_t
+eval_out1 (int esz, double yv, const vmb_rec1_t *r, const vmb_rec2_t *r2,
+	   uint32_t exp1)
+{
+  if (esz == 4)
+    {
+      if (r2)
+	{
+	  vmb_rec1_t t;
+	  t.expect = exp1;
+	  t.ref_hi = r2->ref_hi;
+	  t.ref_lo = r2->ref_lo;
+	  t.exact_bits = r2->exact_bits;
+	  return ulp_eval_f32 ((float) yv, &t);
+	}
+      return ulp_eval_f32 ((float) yv, r);
+    }
+  return r2 ? ulp_eval_core (yv, exp1, r2->ref_hi, r2->ref_lo, r2->exact_bits)
+	    : ulp_eval (yv, r);
+}
+
+/* Accuracy verdict for output 2 of a dual record.  */
+static ulp_verdict_t
+eval_out2 (int esz, double yv2, const vmb_rec2_t *r2, uint32_t exp2)
+{
+  return esz == 4 ? ulp_eval2_f32 ((float) yv2, r2, exp2)
+		  : ulp_eval2 (yv2, r2, exp2);
+}
 
 static int
 test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
@@ -307,16 +461,19 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
 {
   const uint64_t nrec = bl->hdr.nrec;
   const size_t rsz = bl->hdr.rec_size;
-  double *ybase = malloc ((nrec + 2 * GUARD) * sizeof (double));
-  double *y2base = malloc ((nrec + 2 * GUARD) * sizeof (double));
+  const int esz = bl->esz;		/* 8 (binary64) or 4 (binary32) */
+  const int f32 = esz == 4;
+  void *ybase = malloc ((nrec + 2 * GUARD) * esz);
+  void *y2base = malloc ((nrec + 2 * GUARD) * esz);
   int *sgn = malloc ((nrec + 1) * sizeof (int));
-  double *y = ybase + GUARD, *y2 = y2base + GUARD;
+  char *y = (char *) ybase + (size_t) GUARD * esz;
+  char *y2 = (char *) y2base + (size_t) GUARD * esz;
   int fails = 0;
 
   for (int g = 0; g < GUARD; g++)
     {
-      memcpy (&ybase[g], &(uint64_t) { CANARY }, 8);
-      memcpy (&ybase[GUARD + nrec + g], &(uint64_t) { CANARY }, 8);
+      canary_put (ybase, g, esz);
+      canary_put (ybase, GUARD + nrec + g, esz);
     }
 
   /* Probe presence.  */
@@ -353,15 +510,14 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
       uint32_t fpf = r2 ? r2->fpflags : r->fpflags;
       const uint32_t CLASSY = VMB_EXPECT_NAN | VMB_EXPECT_INF
 			      | VMB_EXPECT_EXACT;
-      ulp_verdict_t v = r2 ? ulp_eval_core (y[i], exp1, r2->ref_hi,
-					    r2->ref_lo, r2->exact_bits)
-			   : ulp_eval (y[i], r);
+      double yv = elem_double (y, i, esz);
+      ulp_verdict_t v = eval_out1 (esz, yv, r, r2, exp1);
       ulp_verdict_t v2 = { 0.0, 1, 1 };
       /* lgamma_r's second output is an int, checked against expect_sign
 	 below; there is no second double to evaluate.  */
       if (r2 && bl->hdr.kind == VMB_OUT_DUAL)
 	{
-	  v2 = ulp_eval2 (y2[i], r2, exp2);
+	  v2 = eval_out2 (esz, elem_double (y2, i, esz), r2, exp2);
 	  v.class_ok = v.class_ok && v2.class_ok;
 	}
       agg_expected |= fpf & VMB_F_GATE;
@@ -399,21 +555,21 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
 	  n_class += !v.class_ok;
 	  if (shown < 10)
 	    {
-	      uint64_t gotb;
+	      uint64_t gotb = elem_bits (y, i, esz);
+	      double av = elem_double (bl->a, i, esz);
 	      char bbuf[48];
-	      memcpy (&gotb, &y[i], 8);
 	      shown++;
 	      /* Binary functions print both arguments: without the second
 		 one a FAIL line cannot be reproduced by hand.  */
 	      if (f->nin == 2)
 		snprintf (bbuf, sizeof bbuf, " b=%.17g (0x%016lx)",
-			  bl->b[i], (unsigned long) r->in1);
+			  elem_double (bl->b, i, esz),
+			  (unsigned long) r->in1);
 	      else
 		bbuf[0] = '\0';
 	      printf ("  FAIL %s a=%.17g (0x%016lx)%s -> got %.17g"
 		      " (0x%016lx) expect=0x%x exact=0x%016lx ulp=%.4f\n",
-		      f->name, bl->a[i],
-		      (unsigned long) r->in0, bbuf, y[i],
+		      f->name, av, (unsigned long) r->in0, bbuf, yv,
 		      (unsigned long) gotb,
 		      exp1 | (exp2 << VMB_EXPECT2_SHIFT),
 		      (unsigned long) (r2 ? r2->exact_bits : r->exact_bits), u);
@@ -434,7 +590,7 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
   int agg_extra = agg_flags & ~agg_expected;
 
   /* ---- pass 2: length sweep (stripmine consistency + canaries) ---- */
-  size_t L1 = vlen_doubles_m1 ();
+  size_t L1 = f32 ? vlen_floats_m1 () : vlen_doubles_m1 ();
   size_t lens[32];
   int nlens = 0;
   lens[nlens++] = 0;
@@ -453,25 +609,20 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
       size_t n = lens[li];
       if (n > nrec)
 	n = (size_t) nrec;
-      double *ys = malloc ((n + 2 * GUARD) * sizeof (double) + 16);
-      double *yp = ys + GUARD;
+      void *ys = malloc ((n + 2 * GUARD) * esz + 16);
+      char *yp = (char *) ys + (size_t) GUARD * esz;
       for (int g = 0; g < GUARD; g++)
 	{
-	  memcpy (&ys[g], &(uint64_t) { CANARY }, 8);
-	  memcpy (&ys[GUARD + n + g], &(uint64_t) { CANARY }, 8);
+	  canary_put (ys, g, esz);
+	  canary_put (ys, GUARD + n + g, esz);
 	}
       vec_call (f->id, yp, y2, sgn, bl->a, bl->b, n);
       for (size_t i = 0; i < n; i++)
-	if (memcmp (&yp[i], &y[i], 8) != 0)
+	if (memcmp (yp + i * esz, y + i * esz, esz) != 0)
 	  sweep_fail++;
       for (int g = 0; g < GUARD; g++)
-	{
-	  uint64_t c1, c2;
-	  memcpy (&c1, &ys[g], 8);
-	  memcpy (&c2, &ys[GUARD + n + g], 8);
-	  if (c1 != CANARY || c2 != CANARY)
-	    sweep_fail += 1000;
-	}
+	if (!canary_ok (ys, g, esz) || !canary_ok (ys, GUARD + n + g, esz))
+	  sweep_fail += 1000;
       free (ys);
     }
   fails += sweep_fail;
@@ -480,13 +631,16 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
   int align_fail = 0;
   {
     size_t n = nrec < 128 ? (size_t) nrec : 128;
-    double *y2s = malloc ((n + GUARD) * sizeof (double));	/* dual 2nd out */
+    void *y2s = malloc ((n + GUARD) * esz);	/* dual 2nd out */
     for (int off = 0; off < 8; off++)
       {
 	size_t m = n - (size_t) off;
-	vec_call (f->id, y2 + off, y2s, sgn, bl->a + off, bl->b + off, m);
+	char *yo = y2 + (size_t) off * esz;
+	const char *xo = (const char *) bl->a + (size_t) off * esz;
+	const char *x2o = (const char *) bl->b + (size_t) off * esz;
+	vec_call (f->id, yo, y2s, sgn, xo, x2o, m);
 	for (size_t i = 0; i < m; i++)
-	  if (memcmp (&y2[off + i], &y[off + i], 8) != 0)
+	  if (memcmp (yo + i * esz, y + ((size_t) off + i) * esz, esz) != 0)
 	    align_fail++;
       }
     free (y2s);
@@ -504,12 +658,18 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
       const vmb_rec1_t *r = (const vmb_rec1_t *) ((char *) bl->recs + i * rsz);
       const vmb_rec2_t *r2 = bl->hdr.kind == VMB_OUT_SINGLE
 			     ? NULL : (const vmb_rec2_t *) r;
+      const char *xio = (const char *) bl->a + i * esz;
+      const char *x2io = (const char *) bl->b + i * esz;
+      double av = elem_double (bl->a, i, esz);
+      double bv = elem_double (bl->b, i, esz);
       if (per_rec)
 	{
-	  double yo;
+	  double yo_d;
+	  float yo_f;
+	  void *yo = f32 ? (void *) &yo_f : (void *) &yo_d;
 	  int sgn1 = 0;
 	  feclearexcept (FE_ALL_EXCEPT);
-	  vec_call (f->id, &yo, y2, &sgn1, &bl->a[i], &bl->b[i], 1);
+	  vec_call (f->id, yo, y2, &sgn1, xio, x2io, 1);
 	  int got = fetestexcept (FE_ALL_EXCEPT) & VMB_F_GATE;
 	  int want = (r2 ? r2->fpflags : r->fpflags) & VMB_F_GATE;
 	  if (bl->hdr.kind == VMB_OUT_DUAL_INT)
@@ -523,7 +683,7 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
 		    {
 		      flag_shown++;
 		      printf ("  SIGNFAIL %s a=%.17g got=%d want=%d\n",
-			      f->name, bl->a[i], sgn1, ri->expect_sign);
+			      f->name, av, sgn1, ri->expect_sign);
 		    }
 		}
 	    }
@@ -536,21 +696,37 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
 		  flag_shown++;
 		  printf ("  FLAGFAIL %s a=%.17g (0x%016lx) b=%.17g got=0x%x"
 			  " want=0x%x\n",
-			  f->name, bl->a[i],
-			  (unsigned long) r->in0, bl->b[i], got, want);
+			  f->name, av,
+			  (unsigned long) r->in0, bv, got, want);
 		}
 	    }
 	}
       if (has_cross (f->id))
 	{
-	  double sr = scalar_ref (f->id, bl->a[i], bl->b[i]);
+	  double sr = scalar_ref (f->id, av, bv);
 	  cross_n++;
-	  if (memcmp (&sr, &y[i], 8) != 0)
+	  if (f32)
 	    {
-	      cross_diff++;
-	      double d = ulp_distance (y[i], sr);
-	      if (d > cross_max_ulp)
-		cross_max_ulp = d;
+	      float srf = (float) sr;
+	      float yvf = (float) elem_double (y, i, esz);
+	      if (memcmp (&srf, &yvf, 4) != 0)
+		{
+		  cross_diff++;
+		  double d = ulp_distance_f32 (yvf, srf);
+		  if (d > cross_max_ulp)
+		    cross_max_ulp = d;
+		}
+	    }
+	  else
+	    {
+	      double yvd = elem_double (y, i, esz);
+	      if (memcmp (&sr, &yvd, 8) != 0)
+		{
+		  cross_diff++;
+		  double d = ulp_distance (yvd, sr);
+		  if (d > cross_max_ulp)
+		    cross_max_ulp = d;
+		}
 	    }
 	}
     }
@@ -571,7 +747,8 @@ test_function (const fdesc_t *f, blob_t *bl, long cross_max, int no_fail,
     {
       printf ("  worst:");
       for (int k = 0; k < WORSTN && worst.idx[k] != UINT64_MAX; k++)
-	printf (" [%.17g:%.3f]", bl->a[worst.idx[k]], worst.ulp[k]);
+	printf (" [%.17g:%.3f]", elem_double (bl->a, worst.idx[k], esz),
+		worst.ulp[k]);
       printf ("\n");
     }
 

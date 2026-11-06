@@ -2,21 +2,27 @@
 
    Shared by the MPFR reference generator and the target runner.
 
-   VMFUNC(id, name, nin, kind, ulp, ref)
+   VMFUNC(id, name, nin, kind, prec, ulp, ref)
      id   -- stable numeric id (blob file identity)
      name -- function name; vector entry point is v<name>
-     nin  -- number of double inputs (1 or 2)
+     nin  -- number of scalar inputs (1 or 2)
      kind -- VMB_OUT_SINGLE / VMB_OUT_DUAL / VMB_OUT_DUAL_INT
+     prec -- F64 (binary64, double arrays) or F32 (binary32, float
+             arrays); selects the record encoding (see vmblob.h) and the
+             ulp metric (see ulp.h)
      ulp  -- accuracy threshold in ulps (all functions: 1.0)
      ref  -- scalar cross-check expression in terms of a, b (report-only,
              never a FAIL criterion; the MPFR reference decides).  Use
              VMREF_NONE where no meaningful scalar analogue exists.
 
    ids are grouped by function family and must never be renumbered
-   (blobs are keyed by id).  */
+   (blobs are keyed by id).  The binary32 entries keep the binary64
+   order: id 100 + n is the float variant of id n, so FID_sqrtf == 101.
+
+   kind/prec tokens are paste-safe bare words.  */
 
 #ifndef VMFUNC
-#error "define VMFUNC(id, name, nin, kind, ulp, ref) before including"
+#error "define VMFUNC(id, name, nin, kind, prec, ulp, ref) before including"
 #endif
 
 #ifndef VMREF_NONE
@@ -24,52 +30,99 @@
 #endif
 
 /* ---- P1: direct-mapped roots ---- */
-VMFUNC(1,  sqrt,     1, SINGLE, 1.0, sqrt(a))
-VMFUNC(2,  rsqrt,    1, SINGLE, 1.0, sc_rsqrt(a))
-VMFUNC(3,  cbrt,     1, SINGLE, 1.0, cbrt(a))
+VMFUNC(1,  sqrt,     1, SINGLE, F64, 1.0, sqrt(a))
+VMFUNC(2,  rsqrt,    1, SINGLE, F64, 1.0, sc_rsqrt(a))
+VMFUNC(3,  cbrt,     1, SINGLE, F64, 1.0, cbrt(a))
 
 /* ---- P2: exp/log/pow family ---- */
-VMFUNC(4,  exp,      1, SINGLE, 1.0, exp(a))
-VMFUNC(5,  exp2,     1, SINGLE, 1.0, exp2(a))
-VMFUNC(6,  exp10,    1, SINGLE, 1.0, sc_exp10(a))
-VMFUNC(7,  expm1,    1, SINGLE, 1.0, expm1(a))
-VMFUNC(8,  log,      1, SINGLE, 1.0, log(a))
-VMFUNC(9,  log2,     1, SINGLE, 1.0, (log2)(a))
-VMFUNC(10, log10,    1, SINGLE, 1.0, log10(a))
-VMFUNC(11, log1p,    1, SINGLE, 1.0, log1p(a))
-VMFUNC(12, log2p1,   1, SINGLE, 1.0, sc_log2p1(a))
-VMFUNC(13, pow,      2, SINGLE, 1.0, pow(a, b))
+VMFUNC(4,  exp,      1, SINGLE, F64, 1.0, exp(a))
+VMFUNC(5,  exp2,     1, SINGLE, F64, 1.0, exp2(a))
+VMFUNC(6,  exp10,    1, SINGLE, F64, 1.0, sc_exp10(a))
+VMFUNC(7,  expm1,    1, SINGLE, F64, 1.0, expm1(a))
+VMFUNC(8,  log,      1, SINGLE, F64, 1.0, log(a))
+VMFUNC(9,  log2,     1, SINGLE, F64, 1.0, (log2)(a))
+VMFUNC(10, log10,    1, SINGLE, F64, 1.0, log10(a))
+VMFUNC(11, log1p,    1, SINGLE, F64, 1.0, log1p(a))
+VMFUNC(12, log2p1,   1, SINGLE, F64, 1.0, sc_log2p1(a))
+VMFUNC(13, pow,      2, SINGLE, F64, 1.0, pow(a, b))
 
 /* ---- P3: trigonometric ---- */
-VMFUNC(14, sin,      1, SINGLE, 1.0, sin(a))
-VMFUNC(15, cos,      1, SINGLE, 1.0, cos(a))
-VMFUNC(16, tan,      1, SINGLE, 1.0, tan(a))
-VMFUNC(17, sincos,   1, DUAL,   1.0, VMREF_NONE)
-VMFUNC(18, sinpi,    1, SINGLE, 1.0, sc_sinpi(a))
-VMFUNC(19, cospi,    1, SINGLE, 1.0, sc_cospi(a))
-VMFUNC(20, tanpi,    1, SINGLE, 1.0, sc_tanpi(a))
-VMFUNC(21, sincospi, 1, DUAL,   1.0, VMREF_NONE)
+VMFUNC(14, sin,      1, SINGLE, F64, 1.0, sin(a))
+VMFUNC(15, cos,      1, SINGLE, F64, 1.0, cos(a))
+VMFUNC(16, tan,      1, SINGLE, F64, 1.0, tan(a))
+VMFUNC(17, sincos,   1, DUAL,   F64, 1.0, VMREF_NONE)
+VMFUNC(18, sinpi,    1, SINGLE, F64, 1.0, sc_sinpi(a))
+VMFUNC(19, cospi,    1, SINGLE, F64, 1.0, sc_cospi(a))
+VMFUNC(20, tanpi,    1, SINGLE, F64, 1.0, sc_tanpi(a))
+VMFUNC(21, sincospi, 1, DUAL,   F64, 1.0, VMREF_NONE)
 
 /* ---- P4: inverse trig + hyperbolic ---- */
-VMFUNC(22, asin,     1, SINGLE, 1.0, asin(a))
-VMFUNC(23, acos,     1, SINGLE, 1.0, acos(a))
-VMFUNC(24, atan,     1, SINGLE, 1.0, atan(a))
-VMFUNC(25, atan2,    2, SINGLE, 1.0, atan2(a, b))
-VMFUNC(26, asinpi,   1, SINGLE, 1.0, sc_asinpi(a))
-VMFUNC(27, acospi,   1, SINGLE, 1.0, sc_acospi(a))
-VMFUNC(28, atanpi,   1, SINGLE, 1.0, sc_atanpi(a))
-VMFUNC(29, atan2pi,  2, SINGLE, 1.0, sc_atan2pi(a, b))
-VMFUNC(30, sinh,     1, SINGLE, 1.0, sinh(a))
-VMFUNC(31, cosh,     1, SINGLE, 1.0, cosh(a))
-VMFUNC(32, tanh,     1, SINGLE, 1.0, tanh(a))
-VMFUNC(33, asinh,    1, SINGLE, 1.0, asinh(a))
-VMFUNC(34, acosh,    1, SINGLE, 1.0, acosh(a))
-VMFUNC(35, atanh,    1, SINGLE, 1.0, atanh(a))
-VMFUNC(36, hypot,    2, SINGLE, 1.0, hypot(a, b))
+VMFUNC(22, asin,     1, SINGLE, F64, 1.0, asin(a))
+VMFUNC(23, acos,     1, SINGLE, F64, 1.0, acos(a))
+VMFUNC(24, atan,     1, SINGLE, F64, 1.0, atan(a))
+VMFUNC(25, atan2,    2, SINGLE, F64, 1.0, atan2(a, b))
+VMFUNC(26, asinpi,   1, SINGLE, F64, 1.0, sc_asinpi(a))
+VMFUNC(27, acospi,   1, SINGLE, F64, 1.0, sc_acospi(a))
+VMFUNC(28, atanpi,   1, SINGLE, F64, 1.0, sc_atanpi(a))
+VMFUNC(29, atan2pi,  2, SINGLE, F64, 1.0, sc_atan2pi(a, b))
+VMFUNC(30, sinh,     1, SINGLE, F64, 1.0, sinh(a))
+VMFUNC(31, cosh,     1, SINGLE, F64, 1.0, cosh(a))
+VMFUNC(32, tanh,     1, SINGLE, F64, 1.0, tanh(a))
+VMFUNC(33, asinh,    1, SINGLE, F64, 1.0, asinh(a))
+VMFUNC(34, acosh,    1, SINGLE, F64, 1.0, acosh(a))
+VMFUNC(35, atanh,    1, SINGLE, F64, 1.0, atanh(a))
+VMFUNC(36, hypot,    2, SINGLE, F64, 1.0, hypot(a, b))
 
 /* ---- P5: dd special functions ---- */
-VMFUNC(37, erf,      1, SINGLE, 1.0, erf(a))
-VMFUNC(38, erfc,     1, SINGLE, 1.0, erfc(a))
-VMFUNC(39, tgamma,   1, SINGLE, 1.0, tgamma(a))
-VMFUNC(40, lgamma,   1, SINGLE, 1.0, lgamma(a))
-VMFUNC(41, lgamma_r, 1, DUAL_INT, 1.0, VMREF_NONE)
+VMFUNC(37, erf,      1, SINGLE, F64, 1.0, erf(a))
+VMFUNC(38, erfc,     1, SINGLE, F64, 1.0, erfc(a))
+VMFUNC(39, tgamma,   1, SINGLE, F64, 1.0, tgamma(a))
+VMFUNC(40, lgamma,   1, SINGLE, F64, 1.0, lgamma(a))
+VMFUNC(41, lgamma_r, 1, DUAL_INT, F64, 1.0, VMREF_NONE)
+
+/* ---- binary32 variants: id 100 + n, same order, same kinds ---- */
+VMFUNC(101, sqrtf,     1, SINGLE, F32, 1.0, sqrtf(a))
+VMFUNC(102, rsqrtf,    1, SINGLE, F32, 1.0, sc_rsqrtf(a))
+VMFUNC(103, cbrtf,     1, SINGLE, F32, 1.0, cbrtf(a))
+
+VMFUNC(104, expf,      1, SINGLE, F32, 1.0, expf(a))
+VMFUNC(105, exp2f,     1, SINGLE, F32, 1.0, exp2f(a))
+VMFUNC(106, exp10f,    1, SINGLE, F32, 1.0, sc_exp10f(a))
+VMFUNC(107, expm1f,    1, SINGLE, F32, 1.0, expm1f(a))
+VMFUNC(108, logf,      1, SINGLE, F32, 1.0, logf(a))
+VMFUNC(109, log2f,     1, SINGLE, F32, 1.0, (log2f)(a))
+VMFUNC(110, log10f,    1, SINGLE, F32, 1.0, log10f(a))
+VMFUNC(111, log1pf,    1, SINGLE, F32, 1.0, log1pf(a))
+VMFUNC(112, log2p1f,   1, SINGLE, F32, 1.0, sc_log2p1f(a))
+VMFUNC(113, powf,      2, SINGLE, F32, 1.0, powf(a, b))
+
+VMFUNC(114, sinf,      1, SINGLE, F32, 1.0, sinf(a))
+VMFUNC(115, cosf,      1, SINGLE, F32, 1.0, cosf(a))
+VMFUNC(116, tanf,      1, SINGLE, F32, 1.0, tanf(a))
+VMFUNC(117, sincosf,   1, DUAL,   F32, 1.0, VMREF_NONE)
+VMFUNC(118, sinpif,    1, SINGLE, F32, 1.0, sc_sinpif(a))
+VMFUNC(119, cospif,    1, SINGLE, F32, 1.0, sc_cospif(a))
+VMFUNC(120, tanpif,    1, SINGLE, F32, 1.0, sc_tanpif(a))
+VMFUNC(121, sincospif, 1, DUAL,   F32, 1.0, VMREF_NONE)
+
+VMFUNC(122, asinf,     1, SINGLE, F32, 1.0, asinf(a))
+VMFUNC(123, acosf,     1, SINGLE, F32, 1.0, acosf(a))
+VMFUNC(124, atanf,     1, SINGLE, F32, 1.0, atanf(a))
+VMFUNC(125, atan2f,    2, SINGLE, F32, 1.0, atan2f(a, b))
+VMFUNC(126, asinpif,   1, SINGLE, F32, 1.0, sc_asinpif(a))
+VMFUNC(127, acospif,   1, SINGLE, F32, 1.0, sc_acospif(a))
+VMFUNC(128, atanpif,   1, SINGLE, F32, 1.0, sc_atanpif(a))
+VMFUNC(129, atan2pif,  2, SINGLE, F32, 1.0, sc_atan2pif(a, b))
+VMFUNC(130, sinhf,     1, SINGLE, F32, 1.0, sinhf(a))
+VMFUNC(131, coshf,     1, SINGLE, F32, 1.0, coshf(a))
+VMFUNC(132, tanhf,     1, SINGLE, F32, 1.0, tanhf(a))
+VMFUNC(133, asinhf,    1, SINGLE, F32, 1.0, asinhf(a))
+VMFUNC(134, acoshf,    1, SINGLE, F32, 1.0, acoshf(a))
+VMFUNC(135, atanhf,    1, SINGLE, F32, 1.0, atanhf(a))
+VMFUNC(136, hypotf,    2, SINGLE, F32, 1.0, hypotf(a, b))
+
+VMFUNC(137, erff,      1, SINGLE, F32, 1.0, erff(a))
+VMFUNC(138, erfcf,     1, SINGLE, F32, 1.0, erfcf(a))
+VMFUNC(139, tgammaf,   1, SINGLE, F32, 1.0, tgammaf(a))
+VMFUNC(140, lgammaf,   1, SINGLE, F32, 1.0, lgammaf(a))
+VMFUNC(141, lgamma_rf, 1, DUAL_INT, F32, 1.0, VMREF_NONE)

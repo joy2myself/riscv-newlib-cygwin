@@ -12,6 +12,24 @@
 #define VMB_MAGIC   0x48544d56u		/* "VMTH" */
 #define VMB_VERSION 1u
 
+/* Record precision, stored in hdr.reserved[0]; every other reserved byte
+   stays 0, so a binary64 blob (the original format) is byte-identical to
+   what it always was.
+
+   VMB_PREC_F32 blobs use the same 48/72/80-byte record layouts, but every
+   value field holds a binary32 bit pattern in its LOW 32 bits (the high
+   32 bits are zero):
+     in0 / in1        -- the binary32 inputs, as uint32 bit patterns
+     ref_hi / ref_lo  -- the two-binary32 split (hi + lo ~ exact) of the
+                         correctly rounded reference, hi = RN_f32(exact)
+     exact_bits       -- the bitwise binary32 result for EXPECT_EXACT, or
+                         the binary32 sign source for INF (0x00000000 /
+                         0x80000000)
+   VMB_POISON fills an unused in0/in1 exactly as for binary64.  The class
+   and flag semantics are precision-independent.  */
+#define VMB_PREC_F64 0u
+#define VMB_PREC_F32 32u
+
 /* Output kinds.  */
 #define VMB_OUT_SINGLE    1u	/* one double out                       */
 #define VMB_OUT_DUAL      2u	/* two doubles out (sincos)             */
@@ -66,7 +84,7 @@ typedef struct {
   uint32_t kind;		/* VMB_OUT_* */
   uint32_t flags_policy;	/* VMB_POLICY_* */
   char     name[16];		/* function name, zero-padded */
-  uint8_t  reserved[8];
+  uint8_t  reserved[8];		/* reserved[0]: VMB_PREC_* */
 } vmb_hdr_t;
 
 /* Single-output record: 48 bytes.  */

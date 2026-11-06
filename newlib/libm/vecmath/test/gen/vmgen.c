@@ -33,7 +33,7 @@
 
 typedef struct {
   const char *name;
-  int id, nin, kind;
+  int id, nin, kind, prec;
   double ulp;
 } fdesc_t;
 
@@ -44,15 +44,24 @@ typedef struct {
 #define VMKN_DUAL VMB_OUT_DUAL
 #define VMKN_DUAL_INT VMB_OUT_DUAL_INT
 
+/* prec tokens F64/F32 map to the numeric precision (64/32).  */
+#define VMPC_C(a, b) a##b
+#define VMPC(k) VMPC_C(VMPC_, k)
+#define VMPC_F64 64
+#define VMPC_F32 32
+
 static const fdesc_t fdesc[] = {
-#define VMFUNC(id, name, nin, kind, ulp, ref) [id] = { #name, id, nin, VMKN(kind), ulp },
+#define VMFUNC(id, name, nin, kind, prec, ulp, ref) \
+	[id] = { #name, id, nin, VMKN(kind), VMPC(prec), ulp },
 #include "vmfuncs.def"
 #undef VMFUNC
 };
 #define NFUNC ((int)(sizeof (fdesc) / sizeof (fdesc[0])))
 
+/* FID_* names are the base (binary64) ids: the binary32 rows keep the
+   same order 100 + n, so stripping 100 maps them back onto FID_*.  */
 enum {
-#define VMFUNC(id, name, nin, kind, ulp, ref) FID_##name = id,
+#define VMFUNC(id, name, nin, kind, prec, ulp, ref) FID_##name = id,
 #include "vmfuncs.def"
 #undef VMFUNC
 };
@@ -136,6 +145,78 @@ bdouble (uint64_t u)
   return d;
 }
 
+/* Precision of the function being generated (64 or 32); set by
+   gen_function.  Every sampling, reference and emission path consults it.
+   The binary64 path (g_prec == 64) must stay bit-for-bit unchanged.  */
+static int g_prec = 64;
+
+static inline uint32_t
+fbits (double d)
+{
+  if (isnan (d))
+    {
+      /* A hardware float->double->float round trip quiets signaling
+	 NaNs, so recover the intended binary32 pattern from the bits:
+	 the all-ones exponent maps to itself and the significand fields
+	 align (52 - 23 = 29).  */
+      uint64_t u = dbits (d);
+      return (uint32_t) (((u >> 32) & 0x80000000u)
+			 | 0x7f800000u
+			 | ((u >> 29) & 0x007fffffu));
+    }
+  float f = (float) d;
+  uint32_t u;
+  memcpy (&u, &f, 4);
+  return u;
+}
+
+static inline double
+bfloat (uint32_t u)
+{
+  float f;
+  memcpy (&f, &u, 4);
+  return (double) f;
+}
+
+/* Bit-preserving binary32->binary64 for a NaN with the given pattern that
+   keeps a signaling NaN signaling (a hardware conversion would quiet it).
+   Meaningful for NaN/Inf patterns only; the all-ones exponent maps to
+   itself and the significand fields align.  */
+static inline double
+bfloat_raw (uint32_t u)
+{
+  uint64_t d = ((uint64_t) (u & 0x80000000u) << 32)
+	     | 0x7ff0000000000000ULL
+	     | ((uint64_t) (u & 0x007fffffu) << 29);
+  return bdouble (d);
+}
+
+/* Record bit pattern for a value in the current precision: the binary32
+   pattern in the low 32 bits (high 32 zero) or the full binary64 pattern.  */
+static inline uint64_t
+rbits (double d)
+{
+  return (g_prec == 32) ? (uint64_t) fbits (d) : dbits (d);
+}
+
+/* Same, but an unused second input keeps its full 64-bit VMB_POISON fill
+   in both precisions (vmblob.h: poison is precision-independent).  */
+static inline uint64_t
+inbits (double d)
+{
+  if (dbits (d) == VMB_POISON)
+    return VMB_POISON;
+  return rbits (d);
+}
+
+/* Round a freshly produced value to the current precision, so every
+   binary32 input is a genuine float.  */
+static inline double
+to_prec (double d)
+{
+  return (g_prec == 32) ? (double) (float) d : d;
+}
+
 /* ------------------------------------------------------------------ */
 /* Special-value battery                                               */
 /* ------------------------------------------------------------------ */
@@ -211,6 +292,68 @@ init_specials (void)
     add_special (ldexp (1.0, e));
 }
 
+/* Binary32 counterpart of the battery above, in the same order.  Every
+   entry is exactly representable as a float (stored promoted to double).  */
+static void
+init_specials_f32 (void)
+{
+  nspecials = 0;
+  double qnan = bfloat (0x7fc00000u);
+  double snan = bfloat_raw (0x7f800001u);	/* stays signaling */
+  double nanp = bfloat (0x7fc12345u);	/* qNaN with payload */
+  double nanq = bfloat (0xffc00000u);	/* negative qNaN */
+  add_special (0.0);
+  add_special (-0.0);
+  add_special (INFINITY);
+  add_special (-INFINITY);
+  add_special (qnan);
+  add_special (-qnan);
+  add_special (snan);
+  add_special (bfloat_raw (0xff800001u));	/* -sNaN */
+  add_special (nanp);
+  add_special (nanq);
+  add_special (FLT_MIN);		/* 2^-126, smallest normal */
+  add_special (-FLT_MIN);
+  add_special (FLT_MAX);
+  add_special (-FLT_MAX);
+  add_special (FLT_TRUE_MIN);		/* 2^-149 */
+  add_special (-FLT_TRUE_MIN);
+  add_special (bfloat (0x007ffffeu));	/* subnormal near the top */
+  add_special (bfloat (0x007fffffu));	/* largest subnormal */
+  add_special (bfloat (0x00800000u));	/* smallest normal */
+  add_special (bfloat (0x00800001u));
+  add_special (1.0);
+  add_special (-1.0);
+  add_special (0.5);
+  add_special (-0.5);
+  add_special (2.0);
+  add_special (-2.0);
+  add_special ((double) nextafterf (1.0f, 2.0f));
+  add_special ((double) nextafterf (1.0f, 0.0f));
+  add_special ((double) nextafterf (-1.0f, -2.0f));
+  add_special (3.0);
+  add_special (-3.0);
+  add_special ((double) (float) M_PI);
+  add_special ((double) (float) -M_PI);
+  add_special ((double) (float) M_PI_2);
+  add_special ((double) (float) -M_PI_2);
+  add_special ((double) (float) M_PI_4);
+  add_special ((double) logf (FLT_MAX));	/* exp overflow ~ 88.72284 */
+  add_special ((double) (float) -103.97208);	/* exp underflow */
+  add_special ((double) (float) 35.0401);	/* tgamma/lgamma overflow */
+  add_special (1.0);				/* lgamma pole region */
+  add_special (2.0);
+  add_special (0.4375);				/* atan/erf region edges */
+  add_special (0.84375);
+  add_special (1.25);
+  add_special (2.4375);
+  add_special (22.0);
+  add_special (28.0);
+  add_special (88.75);
+  for (int e = -30; e <= 30; e += 6)	/* a spread of powers of two */
+    add_special ((double) ldexpf (1.0f, e));
+}
+
 /* ------------------------------------------------------------------ */
 /* Input distributions                                                 */
 /* ------------------------------------------------------------------ */
@@ -227,14 +370,14 @@ draw_input (void)
   switch (rng_next () % 5)
     {
     case 0:
-      return 2.0 * rng_unit () - 1.0;
+      return to_prec (2.0 * rng_unit () - 1.0);
     case 1:
-      return 20.0 * rng_unit () - 10.0;
+      return to_prec (20.0 * rng_unit () - 10.0);
     case 2:
       {
 	int e = (int) (rng_next () % 2105) - 1080;	/* -1080..1024 */
 	double m = 1.0 + rng_unit ();
-	double d = ldexp (m, e);
+	double d = to_prec (ldexp (m, e));
 	return (rng_next () & 1) ? -d : d;
       }
     case 3:
@@ -243,6 +386,16 @@ draw_input (void)
 	if ((u & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL)
 	  u &= 0x7fefffffffffffffULL;	/* keep finite */
 	double d = bdouble (u);
+	if (g_prec == 32)
+	  {
+	    /* Round to binary32, then re-apply the same "keep finite" mask
+	       at binary32 width: a finite binary64 value can round up to
+	       +-Inf, which would leave this branch non-finite.  */
+	    uint32_t fb = fbits (d);
+	    if ((fb & 0x7f800000u) == 0x7f800000u)
+	      fb &= 0x7f7fffffu;
+	    d = bfloat (fb);
+	  }
 	return (rng_next () & 1) ? -d : d;
       }
     default:
@@ -254,7 +407,7 @@ draw_input (void)
 	double d = base;
 	while (k > 0) { d = nextafter (d, INFINITY); k--; }
 	while (k < 0) { d = nextafter (d, -INFINITY); k++; }
-	return (rng_next () & 1) ? -d : d;
+	return (rng_next () & 1) ? -to_prec (d) : to_prec (d);
       }
     }
 }
@@ -268,11 +421,11 @@ draw_input2 (double a)
       switch (rng_next () % 6)
 	{
 	case 0: return a;
-	case 1: return 2.0 * a;
-	case 2: return a == 0.0 ? 1.0 : 1.0 / a;
+	case 1: return to_prec (2.0 * a);
+	case 2: return to_prec (a == 0.0 ? 1.0 : 1.0 / a);
 	case 3: return -a;
-	case 4: return floor (a);
-	default: return a * a;
+	case 4: return to_prec (floor (a));
+	default: return to_prec (a * a);
 	}
     }
   return draw_input ();
@@ -393,7 +546,9 @@ cluster_draw (int id)
   };
   const double *c;
   int n;
-  switch (id)
+  /* Strip the binary32 id offset so both precisions share the tables.  */
+  int bid = (g_prec == 32) ? id - 100 : id;
+  switch (bid)
     {
     case FID_sin: case FID_cos: case FID_tan: case FID_sincos:
       c = c_trig; n = 12; break;
@@ -428,7 +583,7 @@ cluster_draw (int id)
     }
   double base = c[rng_next () % (uint64_t) n];
   long k = (long) (rng_next () % 129) - 64;
-  return ulp_walk (base, k);
+  return to_prec (ulp_walk (base, k));
 }
 
 /* ------------------------------------------------------------------ */
@@ -448,6 +603,35 @@ dd_split (mpfr_srcptr t, uint64_t *hi, uint64_t *lo)
   *hi = dbits (h);
   *lo = dbits (l);
   mpfr_clear (r);
+}
+
+/* Binary32 counterpart: hi = RN_f32(exact), lo = the residual rounded to
+   binary32; both patterns live in the low 32 bits (high 32 zero).  */
+static void
+dd_split_f32 (mpfr_srcptr t, uint64_t *hi, uint64_t *lo)
+{
+  float h = mpfr_get_flt (t, MPFR_RNDN);
+  mpfr_t r;
+  mpfr_init (r);
+  mpfr_set_flt (r, h, MPFR_RNDN);
+  mpfr_sub (r, t, r, MPFR_RNDN);
+  float l = mpfr_get_flt (r, MPFR_RNDN);
+  uint32_t uh, ul;
+  memcpy (&uh, &h, 4);
+  memcpy (&ul, &l, 4);
+  *hi = (uint64_t) uh;
+  *lo = (uint64_t) ul;
+  mpfr_clear (r);
+}
+
+/* Split in the current precision.  */
+static void
+split_ref (mpfr_srcptr t, uint64_t *hi, uint64_t *lo)
+{
+  if (g_prec == 32)
+    dd_split_f32 (t, hi, lo);
+  else
+    dd_split (t, hi, lo);
 }
 
 /* ------------------------------------------------------------------ */
@@ -475,7 +659,9 @@ int_kind (double d)
 {
   if (!isfinite (d) || d != floor (d))
     return 0;
-  if (fabs (d) >= 0x1p53)
+  /* Above the precision's unit-in-last-place the spacing is >= 2, so every
+     representable value is an even integer.  */
+  if (fabs (d) >= (g_prec == 32 ? 0x1p24 : 0x1p53))
     return 2;
   long long k = (long long) d;
   return (k & 1) ? 1 : 2;
@@ -487,6 +673,13 @@ int_kind (double d)
 static inline int
 is_snan (double d)
 {
+  if (g_prec == 32)
+    {
+      uint32_t u = fbits (d);
+      return ((u & 0x7f800000u) == 0x7f800000u)
+	     && (u & 0x007fffffu) != 0
+	     && !(u & 0x00400000u);
+    }
   uint64_t u = dbits (d);
   return ((u & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL)
 	 && (u & 0x000fffffffffffffULL) != 0
@@ -502,10 +695,22 @@ nan_result (vmb_rec1_t *rec, double a)
   rec->fpflags = is_snan (a) ? VMB_F_INVALID : 0;
 }
 
+/* Binary-function variant: C99/F.10 raises invalid if EITHER operand is a
+   signaling NaN, not just the one that supplies the result payload.  */
+static void
+nan_result2 (vmb_rec1_t *rec, double a, double b)
+{
+  rec->expect = VMB_EXPECT_NAN | VMB_NAN_QUIET;
+  rec->fpflags = (is_snan (a) || is_snan (b)) ? VMB_F_INVALID : 0;
+}
+
 static int
 compute_record (int id, double a, double b, vmb_rec1_t *rec,
 		vmb_rec2_t *rec2)
 {
+  /* The binary32 rows reuse the binary64 logic verbatim: strip the 100
+     offset so the switch and every per-id test below see the base id.  */
+  int bid = (g_prec == 32) ? id - 100 : id;
   mpfr_t t, ma, mb;
   mpfr_inits2 (REF_BITS, t, ma, mb, (mpfr_ptr) 0);
   mpfr_set_d (ma, a, MPFR_RNDN);
@@ -514,8 +719,8 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
   memset (rec, 0, sizeof *rec);
   if (rec2)
     memset (rec2, 0, sizeof *rec2);
-  rec->in0 = dbits (a);
-  rec->in1 = dbits (b);
+  rec->in0 = inbits (a);
+  rec->in1 = inbits (b);
   rec->ref_hi = VMB_POISON;
   rec->ref_lo = 0;
   rec->exact_bits = VMB_POISON;
@@ -523,7 +728,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
   int handled = 0;
 
   /* ---- per-function exact evaluation + special-value semantics ---- */
-  switch (id)
+  switch (bid)
     {
     case FID_sqrt:
       handled = 1;
@@ -537,12 +742,12 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (a);		/* +-0 preserved */
+	  rec->exact_bits = rbits (a);		/* +-0 preserved */
 	}
       else if (isinf (a))			/* +inf */
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	}
       else
 	mpfr_sqrt (t, ma, MPFR_RNDN);
@@ -555,7 +760,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* rsqrt(+-0) = +inf */
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	  rec->fpflags = VMB_F_DIVBYZERO;
 	}
       else if (signbit (a))			/* a < 0 or -inf */
@@ -566,7 +771,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (isinf (a))
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* rsqrt(+inf) = +0 */
-	  rec->exact_bits = dbits (0.0);
+	  rec->exact_bits = rbits (0.0);
 	}
       else
 	{
@@ -582,12 +787,12 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (isinf (a))
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else
 	mpfr_cbrt (t, ma, MPFR_RNDN);
@@ -602,30 +807,33 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == INFINITY)
 	{
 	  rec->expect = VMB_EXPECT_INF;	/* exact inf, no overflow flag */
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	}
       else if (a == -INFINITY)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* exact +0, no flags */
-	  rec->exact_bits = dbits (0.0);
+	  rec->exact_bits = rbits (0.0);
 	}
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* exp(+-0) = 1 exactly */
-	  rec->exact_bits = dbits (1.0);
+	  rec->exact_bits = rbits (1.0);
 	}
-      else if (id == FID_exp2 && a == floor (a) && a >= -1074.0 && a <= -1023.0)
+      else if (bid == FID_exp2 && a == floor (a)
+	       && a >= (g_prec == 32 ? -149.0 : -1074.0)
+	       && a <= (g_prec == 32 ? -127.0 : -1023.0))
 	{
-	  /* exp2's specialcase() subnormal branch unconditionally runs
-	     force_eval(0x1p-1022 * 0x1p-1022), so it raises UNDERFLOW even
-	     when the exact subnormal power-of-two result is representable.  */
+	  /* exp2's specialcase() subnormal branch unconditionally force-
+	     evaluates the smallest normal squared, so it raises UNDERFLOW
+	     even when the exact subnormal power-of-two result is
+	     representable.  */
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (exp2 (a));
+	  rec->exact_bits = rbits (exp2 (a));
 	  rec->fpflags = VMB_F_UNDERFLOW;
 	}
-      else if (id == FID_exp)
+      else if (bid == FID_exp)
 	mpfr_exp (t, ma, MPFR_RNDN);
-      else if (id == FID_exp2)
+      else if (bid == FID_exp2)
 	mpfr_exp2 (t, ma, MPFR_RNDN);
       else
 	{
@@ -644,17 +852,17 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == INFINITY)
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	}
       else if (a == -INFINITY)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* exactly -1, no flags */
-	  rec->exact_bits = dbits (-1.0);
+	  rec->exact_bits = rbits (-1.0);
 	}
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else
 	mpfr_expm1 (t, ma, MPFR_RNDN);
@@ -667,7 +875,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 1.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* acos(1)/pi = +0 */
-	  rec->exact_bits = dbits (0.0);
+	  rec->exact_bits = rbits (0.0);
 	}
       else if (a > 1.0 || a < -1.0)
 	{
@@ -692,7 +900,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else if (a > 1.0 || a < -1.0)
 	{
@@ -717,7 +925,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* asin(+-0) = +-0 */
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else if (a > 1.0 || a < -1.0)
 	{
@@ -735,7 +943,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 1.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* acos(1) = +0 */
-	  rec->exact_bits = dbits (0.0);
+	  rec->exact_bits = rbits (0.0);
 	}
       else if (a > 1.0 || a < -1.0)
 	{
@@ -755,17 +963,17 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	{
 	  /* C99 F.10.5.1/F.10.5.2, all exact and flag-free.  */
 	  rec->expect = VMB_EXPECT_EXACT;
-	  if (id == FID_erf)
-	    rec->exact_bits = dbits (a > 0 ? 1.0 : -1.0);
+	  if (bid == FID_erf)
+	    rec->exact_bits = rbits (a > 0 ? 1.0 : -1.0);
 	  else
-	    rec->exact_bits = dbits (a > 0 ? 0.0 : 2.0);
+	    rec->exact_bits = rbits (a > 0 ? 0.0 : 2.0);
 	}
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (id == FID_erf ? a : 1.0);
+	  rec->exact_bits = rbits (bid == FID_erf ? a : 1.0);
 	}
-      else if (id == FID_erf)
+      else if (bid == FID_erf)
 	mpfr_erf (t, ma, MPFR_RNDN);
       else
 	mpfr_erfc (t, ma, MPFR_RNDN);
@@ -781,7 +989,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (signbit (a) ? -INFINITY : INFINITY);
+	  rec->exact_bits = rbits (signbit (a) ? -INFINITY : INFINITY);
 	  rec->fpflags = VMB_F_DIVBYZERO;
 	}
       else if (isinf (a))
@@ -789,7 +997,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	  if (a > 0)
 	    {
 	      rec->expect = VMB_EXPECT_INF;
-	      rec->exact_bits = dbits (INFINITY);
+	      rec->exact_bits = rbits (INFINITY);
 	    }
 	  else
 	    {
@@ -816,14 +1024,14 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	{
 	  /* lgamma(+-Inf) = +Inf, exact; *signgamp stays at its initial 1 */
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	}
       else if (a == 0.0 || (a < 0.0 && a == floor (a)))
 	{
 	  /* a pole: +Inf with divide-by-zero.  Only -0 carries the sign
 	     into signgam, so it is -1 there and +1 at every other pole.  */
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	  rec->fpflags = VMB_F_DIVBYZERO;
 	  if (a == 0.0 && signbit (a))
 	    rec2i_sign = -1;
@@ -842,14 +1050,14 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       if (isinf (a) || isinf (b))
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	}
       else if (isnan (a) || isnan (b))
-	nan_result (rec, isnan (a) ? a : b);
+	nan_result2 (rec, a, b);
       else if (a == 0.0 && b == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (0.0);
+	  rec->exact_bits = rbits (0.0);
 	}
       else
 	mpfr_hypot (t, ma, mb, MPFR_RNDN);
@@ -862,12 +1070,12 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (isinf (a))
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else
 	mpfr_asinh (t, ma, MPFR_RNDN);
@@ -885,12 +1093,12 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 1.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (0.0);
+	  rec->exact_bits = rbits (0.0);
 	}
       else if (a == INFINITY)
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	}
       else
 	mpfr_acosh (t, ma, MPFR_RNDN);
@@ -908,13 +1116,13 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 1.0 || a == -1.0)
 	{
 	  rec->expect = VMB_EXPECT_INF;	/* +-Inf, sign from exact_bits */
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	  rec->fpflags = VMB_F_DIVBYZERO;
 	}
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else
 	mpfr_atanh (t, ma, MPFR_RNDN);
@@ -929,13 +1137,13 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == INFINITY)
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	}
       else if (a == 0.0)
 	{
 	  /* log*(+-0) = -inf with divbyzero.  */
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (-INFINITY);
+	  rec->exact_bits = rbits (-INFINITY);
 	  rec->fpflags = VMB_F_DIVBYZERO;
 	}
       else if (a < 0.0 || a == -INFINITY)
@@ -943,9 +1151,9 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	  rec->expect = VMB_EXPECT_NAN | VMB_NAN_QUIET;
 	  rec->fpflags = VMB_F_INVALID;
 	}
-      else if (id == FID_log)
+      else if (bid == FID_log)
 	mpfr_log (t, ma, MPFR_RNDN);
-      else if (id == FID_log2)
+      else if (bid == FID_log2)
 	mpfr_log2 (t, ma, MPFR_RNDN);
       else
 	mpfr_log10 (t, ma, MPFR_RNDN);
@@ -959,12 +1167,12 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == INFINITY)
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (INFINITY);
+	  rec->exact_bits = rbits (INFINITY);
 	}
       else if (a == -1.0)
 	{
 	  rec->expect = VMB_EXPECT_INF;	/* -inf with divbyzero */
-	  rec->exact_bits = dbits (-INFINITY);
+	  rec->exact_bits = rbits (-INFINITY);
 	  rec->fpflags = VMB_F_DIVBYZERO;
 	}
       else if (a < -1.0 || a == -INFINITY)
@@ -975,9 +1183,9 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* +-0 preserved */
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
-      else if (id == FID_log1p)
+      else if (bid == FID_log1p)
 	mpfr_log1p (t, ma, MPFR_RNDN);
       else
 	{
@@ -1005,20 +1213,20 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	    if (a == 1.0 || b == 0.0)
 	      {
 		rec->expect = VMB_EXPECT_EXACT;
-		rec->exact_bits = dbits (1.0);
+		rec->exact_bits = rbits (1.0);
 	      }
 	    else
-	      nan_result (rec, isnan (a) ? a : b);
+	      nan_result2 (rec, a, b);
 	  }
 	else if (b == 0.0)
 	  {
 	    rec->expect = VMB_EXPECT_EXACT;	/* pow(x, +-0) = 1 */
-	    rec->exact_bits = dbits (1.0);
+	    rec->exact_bits = rbits (1.0);
 	  }
 	else if (a == 1.0)
 	  {
 	    rec->expect = VMB_EXPECT_EXACT;	/* pow(1, y) = 1 */
-	    rec->exact_bits = dbits (1.0);
+	    rec->exact_bits = rbits (1.0);
 	  }
 	else if (isinf (b))
 	  {
@@ -1026,17 +1234,17 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	    if (ax == 1.0)
 	      {
 		rec->expect = VMB_EXPECT_EXACT;
-		rec->exact_bits = dbits (1.0);
+		rec->exact_bits = rbits (1.0);
 	      }
 	    else if ((ax > 1.0) == (b > 0.0))
 	      {
 		rec->expect = VMB_EXPECT_INF;
-		rec->exact_bits = dbits (INFINITY);
+		rec->exact_bits = rbits (INFINITY);
 	      }
 	    else
 	      {
 		rec->expect = VMB_EXPECT_EXACT;	/* exact +0, no flags */
-		rec->exact_bits = dbits (0.0);
+		rec->exact_bits = rbits (0.0);
 	      }
 	  }
 	else if (a == 0.0)
@@ -1046,12 +1254,12 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	    if (b > 0.0)
 	      {
 		rec->expect = VMB_EXPECT_EXACT;
-		rec->exact_bits = dbits ((neg && odd) ? -0.0 : 0.0);
+		rec->exact_bits = rbits ((neg && odd) ? -0.0 : 0.0);
 	      }
 	    else
 	      {
 		rec->expect = VMB_EXPECT_INF;
-		rec->exact_bits = dbits ((neg && odd) ? -INFINITY
+		rec->exact_bits = rbits ((neg && odd) ? -INFINITY
 						      : INFINITY);
 		rec->fpflags = VMB_F_DIVBYZERO;
 	      }
@@ -1063,13 +1271,13 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	    if (b > 0.0)
 	      {
 		rec->expect = VMB_EXPECT_INF;
-		rec->exact_bits = dbits ((neg && odd) ? -INFINITY
+		rec->exact_bits = rbits ((neg && odd) ? -INFINITY
 						      : INFINITY);
 	      }
 	    else
 	      {
 		rec->expect = VMB_EXPECT_EXACT;
-		rec->exact_bits = dbits ((neg && odd) ? -0.0 : 0.0);
+		rec->exact_bits = rbits ((neg && odd) ? -0.0 : 0.0);
 	      }
 	  }
 	else if (a < 0.0 && ya == 0)
@@ -1083,11 +1291,11 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	    if (b == 1.0)
 	      {
 		rec->expect = VMB_EXPECT_EXACT;
-		rec->exact_bits = dbits (a);
+		rec->exact_bits = rbits (a);
 		/* subnormal-x lanes still take scalar pow's subnormal
 		   specialcase, whose force_eval raises UNDERFLOW even
 		   though x^1 == x exactly.  */
-		if (fabs (a) < DBL_MIN)
+		if (fabs (a) < (g_prec == 32 ? (double) FLT_MIN : DBL_MIN))
 		  rec->fpflags = VMB_F_UNDERFLOW;
 	      }
 	    else
@@ -1116,9 +1324,9 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	{
 	  /* sin(+-0) = +-0 exactly; cos(+-0) = 1.  */
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (id == FID_sin ? a : 1.0);
+	  rec->exact_bits = rbits (bid == FID_sin ? a : 1.0);
 	}
-      else if (id == FID_sin)
+      else if (bid == FID_sin)
 	mpfr_sin (t, ma, MPFR_RNDN);
       else
 	mpfr_cos (t, ma, MPFR_RNDN);
@@ -1136,7 +1344,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* tan(+-0) = +-0 */
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
       else
 	mpfr_tan (t, ma, MPFR_RNDN);
@@ -1152,25 +1360,25 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	{
 	  /* sinh(+-Inf) = +-Inf, cosh(+-Inf) = +Inf (both exact infinities,
 	     no flags), tanh(+-Inf) = +-1 exactly.  */
-	  if (id == FID_tanh)
+	  if (bid == FID_tanh)
 	    {
 	      rec->expect = VMB_EXPECT_EXACT;
-	      rec->exact_bits = dbits (a > 0 ? 1.0 : -1.0);
+	      rec->exact_bits = rbits (a > 0 ? 1.0 : -1.0);
 	    }
 	  else
 	    {
 	      rec->expect = VMB_EXPECT_INF;
-	      rec->exact_bits = dbits (id == FID_cosh ? INFINITY : a);
+	      rec->exact_bits = rbits (bid == FID_cosh ? INFINITY : a);
 	    }
 	}
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (id == FID_cosh ? 1.0 : a);
+	  rec->exact_bits = rbits (bid == FID_cosh ? 1.0 : a);
 	}
-      else if (id == FID_sinh)
+      else if (bid == FID_sinh)
 	mpfr_sinh (t, ma, MPFR_RNDN);
-      else if (id == FID_cosh)
+      else if (bid == FID_cosh)
 	mpfr_cosh (t, ma, MPFR_RNDN);
       else
 	mpfr_tanh (t, ma, MPFR_RNDN);
@@ -1184,9 +1392,9 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;	/* atan(+-0) = +-0 */
-	  rec->exact_bits = dbits (a);
+	  rec->exact_bits = rbits (a);
 	}
-      else if (id == FID_atan)
+      else if (bid == FID_atan)
 	mpfr_atan (t, ma, MPFR_RNDN);
       else
 	{
@@ -1203,14 +1411,14 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
     case FID_atan2pi:
       handled = 1;
       if (isnan (a) || isnan (b))
-	nan_result (rec, isnan (a) ? a : b);
+	nan_result2 (rec, a, b);
       else
 	{
 	  /* MPFR's atan2 reproduces the C99 F.10.1.4 edge cases, so the
 	     generic post-processing classifies +-0/+-pi/+-pi/2/+-3pi/4
 	     for us.  */
 	  mpfr_atan2 (t, ma, mb, MPFR_RNDN);
-	  if (id == FID_atan2pi)
+	  if (bid == FID_atan2pi)
 	    {
 	      mpfr_t p;
 	      mpfr_init2 (p, REF_BITS);
@@ -1235,7 +1443,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
       else if (a == 0.0)
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (id == FID_cospi ? 1.0 : a);
+	  rec->exact_bits = rbits (bid == FID_cospi ? 1.0 : a);
 	}
       else if (a == floor (a))
 	{
@@ -1243,35 +1451,35 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	     tanpi(n) = copysign(0, x)*(-1)^n.  All exact, no flags.  */
 	  int odd = fmod (fabs (a), 2.0) == 1.0;
 	  rec->expect = VMB_EXPECT_EXACT;
-	  if (id == FID_cospi)
-	    rec->exact_bits = dbits (odd ? -1.0 : 1.0);
-	  else if (id == FID_sinpi)
-	    rec->exact_bits = dbits (copysign (0.0, a));
+	  if (bid == FID_cospi)
+	    rec->exact_bits = rbits (odd ? -1.0 : 1.0);
+	  else if (bid == FID_sinpi)
+	    rec->exact_bits = rbits (copysign (0.0, a));
 	  else
-	    rec->exact_bits = dbits (copysign (0.0, odd ? -a : a));
+	    rec->exact_bits = rbits (copysign (0.0, odd ? -a : a));
 	}
       else if (is_half_int (a))
 	{
-	  if (id == FID_cospi)
+	  if (bid == FID_cospi)
 	    {
 	      rec->expect = VMB_EXPECT_EXACT;	/* cospi(n + 1/2) = +0 */
-	      rec->exact_bits = dbits (0.0);
+	      rec->exact_bits = rbits (0.0);
 	    }
-	  else if (id == FID_tanpi)
+	  else if (bid == FID_tanpi)
 	    {
 	      /* tanpi(n + 1/2) = (-1)^n * +Inf, n = floor(x), divbyzero.
 		 (n + 1/2 must be representable; the fold guarantees it.)  */
 	      int odd = fmod (fabs (floor (a)), 2.0) == 1.0;
 	      rec->expect = VMB_EXPECT_INF;
-	      rec->exact_bits = dbits (odd ? -INFINITY : INFINITY);
+	      rec->exact_bits = rbits (odd ? -INFINITY : INFINITY);
 	      rec->fpflags = VMB_F_DIVBYZERO;
 	    }
 	  else
 	    mpfr_sinpi (t, ma, MPFR_RNDN);	/* exactly +-1 */
 	}
-      else if (id == FID_sinpi)
+      else if (bid == FID_sinpi)
 	mpfr_sinpi (t, ma, MPFR_RNDN);
-      else if (id == FID_cospi)
+      else if (bid == FID_cospi)
 	mpfr_cospi (t, ma, MPFR_RNDN);
       else
 	mpfr_tanpi (t, ma, MPFR_RNDN);
@@ -1301,20 +1509,20 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	else if (a == 0.0)
 	  {
 	    e1 = e2 = VMB_EXPECT_EXACT;
-	    x1 = dbits (a);
-	    x2 = dbits (1.0);
+	    x1 = rbits (a);
+	    x2 = rbits (1.0);
 	  }
 	else if (a == floor (a))
 	  {
 	    int odd = fmod (fabs (a), 2.0) == 1.0;
 	    e1 = e2 = VMB_EXPECT_EXACT;
-	    x1 = dbits (copysign (0.0, a));
-	    x2 = dbits (odd ? -1.0 : 1.0);
+	    x1 = rbits (copysign (0.0, a));
+	    x2 = rbits (odd ? -1.0 : 1.0);
 	  }
 	else if (is_half_int (a))
 	  {
 	    e2 = VMB_EXPECT_EXACT;		/* cospi = +0 */
-	    x2 = dbits (0.0);
+	    x2 = rbits (0.0);
 	    need1 = 1;				/* sinpi = +-1 via MPFR */
 	  }
 	else
@@ -1327,24 +1535,30 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	  {
 	    mpfr_sinpi (t, ma, MPFR_RNDN);
 	    /* same subnormal rule as the generic post-processing: the sinpi
-	       half underflows exactly when it lands below DBL_MIN while
-	       being inexact, and the lane carries one flag word.  */
+	       half underflows exactly when it lands below the smallest
+	       normal while being inexact, and the lane carries one flag
+	       word.  */
 	    if (!mpfr_zero_p (t))
 	      {
-		double h = mpfr_get_d (t, MPFR_RNDN);
+		double h = (g_prec == 32) ? (double) mpfr_get_flt (t, MPFR_RNDN)
+					  : mpfr_get_d (t, MPFR_RNDN);
 		mpfr_t td;
 		mpfr_init2 (td, 64);
-		mpfr_set_d (td, h, MPFR_RNDN);
-		if (!mpfr_equal_p (t, td) && fabs (h) < DBL_MIN)
+		if (g_prec == 32)
+		  mpfr_set_flt (td, (float) h, MPFR_RNDN);
+		else
+		  mpfr_set_d (td, h, MPFR_RNDN);
+		if (!mpfr_equal_p (t, td)
+		    && fabs (h) < (g_prec == 32 ? (double) FLT_MIN : DBL_MIN))
 		  rec->fpflags |= VMB_F_UNDERFLOW;
 		mpfr_clear (td);
 	      }
-	    dd_split (t, &rec->ref_hi, &rec->ref_lo);
+	    split_ref (t, &rec->ref_hi, &rec->ref_lo);
 	  }
 	if (need2)
 	  {
 	    mpfr_cospi (t, ma, MPFR_RNDN);
-	    dd_split (t, &rec2->ref2_hi, &rec2->ref2_lo);
+	    split_ref (t, &rec2->ref2_hi, &rec2->ref2_lo);
 	  }
 	rec->expect |= (e2 & 0x1f) << VMB_EXPECT2_SHIFT;
 	rec2->expect = rec->expect;
@@ -1383,8 +1597,8 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	else if (a == 0.0)
 	  {
 	    e1 = e2 = VMB_EXPECT_EXACT;
-	    x1 = dbits (a);		/* sin(+-0) = +-0 */
-	    x2 = dbits (1.0);		/* cos(+-0) = 1 */
+	    x1 = rbits (a);		/* sin(+-0) = +-0 */
+	    x2 = rbits (1.0);		/* cos(+-0) = 1 */
 	  }
 	else
 	  mpfr_sin (t, ma, MPFR_RNDN);
@@ -1393,12 +1607,12 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 	rec->fpflags = f1 | f2;		/* one gate per lane; both agree */
 	rec2->exact2_bits = x2;
 	if (!(e1 & (VMB_EXPECT_NAN | VMB_EXPECT_EXACT)))
-	  dd_split (t, &rec->ref_hi, &rec->ref_lo);
+	  split_ref (t, &rec->ref_hi, &rec->ref_lo);
 	/* second output: cos */
 	if (!(e2 & (VMB_EXPECT_NAN | VMB_EXPECT_EXACT)))
 	  {
 	    mpfr_cos (t, ma, MPFR_RNDN);
-	    dd_split (t, &rec2->ref2_hi, &rec2->ref2_lo);
+	    split_ref (t, &rec2->ref2_hi, &rec2->ref2_lo);
 	  }
 	/* Pack the second-output class into rec->expect bits 8..12; the dual
 	   record is the vmb_rec2_t image, so mirror the shared prefix into
@@ -1426,89 +1640,101 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
 
   /* ---- generic finite-result post-processing (t holds the exact value;
      skipped when the special-value switch already filled the record).
-     MPFR notes: (1) mpfr_get_d does NOT reliably set erange on double
-     overflow -- compare against DBL_MAX instead; (2) results with true
-     exponents below MPFR's emin (~2^-31) underflow to zero INSIDE mpfr
-     with erange set -- that always implies double underflow too.  ---- */
+     MPFR notes: (1) mpfr_get_d/flt does NOT reliably set erange on
+     overflow -- decide from the value it returns instead (an infinite
+     return IS the IEEE round-to-nearest overflow, so a value between the
+     type maximum and the 2^(emax+1)-2^(emax-p) midpoint correctly stays
+     finite); (2) results with true exponents below MPFR's emin (~2^-31)
+     underflow to zero INSIDE mpfr with erange set -- that always implies
+     underflow in the target precision too.  ---- */
   if (rec->expect == VMB_EXPECT_NORMAL)
     {
-      mpfr_t td, dmax;
+      const int p32 = (g_prec == 32);
+      const double rmin = p32 ? (double) FLT_MIN : DBL_MIN;
+      mpfr_t td;
       mpfr_init2 (td, REF_BITS);
-      mpfr_init2 (dmax, 64);
-      mpfr_set_d (dmax, DBL_MAX, MPFR_RNDN);
 
       if (mpfr_inf_p (t))
 	{
 	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (mpfr_sgn (t) > 0 ? INFINITY : -INFINITY);
+	  rec->exact_bits = rbits (mpfr_sgn (t) > 0 ? INFINITY : -INFINITY);
 	  rec->fpflags |= VMB_F_OVERFLOW;
 	}
       else if (mpfr_zero_p (t))
 	{
 	  rec->expect = VMB_EXPECT_EXACT;
-	  rec->exact_bits = dbits (mpfr_signbit (t) ? -0.0 : 0.0);
+	  rec->exact_bits = rbits (mpfr_signbit (t) ? -0.0 : 0.0);
 	  /* Zero from a finite input: for exp/exp2/exp10 (and any strictly
 	     positive-range function) the exact value can never be zero, so
 	     this is MPFR-internal underflow (true exponent below MPFR's
-	     emin, far below the double subnormal grid): double result is
-	     +-0 with UNDERFLOW.  mpfr_get_d/mpfr_exp do NOT set erange for
-	     this, so decide by the function's range instead.  Other
-	     functions treat a zero result as exact (no flags) unless they
-	     opt in.
+	     emin, far below the target subnormal grid): the result is
+	     +-0 with UNDERFLOW.  mpfr_get_d/flt and mpfr_exp do NOT set
+	     erange for this, so decide by the function's range instead.
+	     Other functions treat a zero result as exact (no flags) unless
+	     they opt in.
 
 	     erfc opts in on the same grounds: it is strictly positive on
 	     the reals, and its zero is a rounded zero from a nonzero exact
 	     value, i.e. tiny and inexact.  */
-	  if (id == FID_exp || id == FID_exp2 || id == FID_exp10
-	      || id == FID_pow || id == FID_erfc || id == FID_tgamma)
+	  if (bid == FID_exp || bid == FID_exp2 || bid == FID_exp10
+	      || bid == FID_pow || bid == FID_erfc || bid == FID_tgamma)
 	    rec->fpflags |= VMB_F_UNDERFLOW;
-	}
-      else if (mpfr_cmpabs (t, dmax) > 0)
-	{
-	  rec->expect = VMB_EXPECT_INF;
-	  rec->exact_bits = dbits (mpfr_sgn (t) > 0 ? INFINITY : -INFINITY);
-	  rec->fpflags |= VMB_F_OVERFLOW;
 	}
       else
 	{
-	  double h = mpfr_get_d (t, MPFR_RNDN);
-	  if (h == 0.0)
+	  double h = p32 ? (double) mpfr_get_flt (t, MPFR_RNDN)
+			 : mpfr_get_d (t, MPFR_RNDN);
+	  if (isinf (h))
+	    {
+	      /* Overflow is decided by the correctly rounded result, not a
+		 magnitude test against the type maximum: round-to-nearest
+		 overflows only at/above the midpoint 2^(emax+1) - 2^(emax-p),
+		 and a value between the maximum and that midpoint still
+		 rounds to the maximum.  */
+	      rec->expect = VMB_EXPECT_INF;
+	      rec->exact_bits = rbits (h);
+	      rec->fpflags |= VMB_F_OVERFLOW;
+	    }
+	  else if (h == 0.0)
 	    {
 	      /* Below the subnormal grid: rounds to +-0, UNDERFLOW.  */
 	      rec->expect = VMB_EXPECT_EXACT;
-	      rec->exact_bits = dbits (mpfr_signbit (t) ? -0.0 : 0.0);
+	      rec->exact_bits = rbits (mpfr_signbit (t) ? -0.0 : 0.0);
 	      rec->fpflags |= VMB_F_UNDERFLOW;
 	    }
 	  else
 	    {
-	      mpfr_set_d (td, h, MPFR_RNDN);
+	      if (p32)
+		mpfr_set_flt (td, (float) h, MPFR_RNDN);
+	      else
+		mpfr_set_d (td, h, MPFR_RNDN);
 	      /* Bitwise-exact gating only for functions whose algorithms
 		 are exact at representable points by construction.  Others
 		 (log family, exp10, pow, ...) are held to the <=1 ulp
 		 metric via the dd reference -- fdlibm/optimized-routines
 		 scalars are not bitwise-exact at, e.g., powers of ten
 		 either.  */
-	      int exact_strict = (id == FID_sqrt || id == FID_rsqrt
-				  || id == FID_cbrt || id == FID_exp2);
+	      int exact_strict = (bid == FID_sqrt || bid == FID_rsqrt
+				  || bid == FID_cbrt || bid == FID_exp2);
 	      int is_exact = mpfr_equal_p (t, td) != 0;
 	      if (exact_strict && is_exact)
 		{
 		  rec->expect = VMB_EXPECT_EXACT;
-		  rec->exact_bits = dbits (h);
+		  rec->exact_bits = rbits (h);
 		}
 	      else
-		dd_split (t, &rec->ref_hi, &rec->ref_lo);
+		split_ref (t, &rec->ref_hi, &rec->ref_lo);
 	      /* Underflow flag: result tiny (subnormal) AND inexact --
 		 decided by true exactness, not by the gating policy.
-		 Exception: scalar pow's specialcase() runs the
-		 force_eval(0x1p-1022 * 0x1p-1022) trick unconditionally
-		 on the subnormal branch, so any subnormal pow result
-		 raises UNDERFLOW even when exactly representable.  */
-	      if ((!is_exact || id == FID_pow) && fabs (h) < DBL_MIN)
+		 Exception: scalar pow's specialcase() unconditionally
+		 force-evaluates the smallest normal squared on the
+		 subnormal branch, so any subnormal pow result raises
+		 UNDERFLOW even when exactly representable.  */
+	      if ((!is_exact || bid == FID_pow) && fabs (h) < rmin)
 		rec->fpflags |= VMB_F_UNDERFLOW;
 	    }
 	}
-      mpfr_clears (td, dmax, (mpfr_ptr) 0);
+      mpfr_clear (td);
     }
 
   /* lgamma_r is DUAL_INT: the blob's record is a vmb_rec2_t image, the
@@ -1516,7 +1742,7 @@ compute_record (int id, double a, double b, vmb_rec1_t *rec,
      Mirror the value record into it.  The class is NOT shifted into the
      upper bits -- the second output is an int, checked separately against
      rec2i_sign, not a value with a class of its own.  */
-  if (id == FID_lgamma_r && rec2 != NULL)
+  if (bid == FID_lgamma_r && rec2 != NULL)
     {
       rec2->expect = rec->expect;
       rec2->fpflags = rec->fpflags;
@@ -1547,6 +1773,14 @@ gen_function (int id, const char *tier, uint64_t seed, const char *outdir)
   const fdesc_t *f = &fdesc[id];
   uint64_t nrand = tier_count (tier);
 
+  /* Select the precision before anything else: the specials battery,
+     sampling, reference split and record encoding all consult g_prec.  */
+  g_prec = f->prec;
+  if (g_prec == 32)
+    init_specials_f32 ();
+  else
+    init_specials ();
+
   rng_seed (seed ^ fnv1a (f->name));
 
   char path[1024];
@@ -1570,6 +1804,7 @@ gen_function (int id, const char *tier, uint64_t seed, const char *outdir)
   hdr.kind = f->kind;
   hdr.flags_policy = VMB_POLICY_FLAG_PER_REC;
   snprintf (hdr.name, sizeof hdr.name, "%s", f->name);
+  hdr.reserved[0] = f->prec == 32 ? VMB_PREC_F32 : VMB_PREC_F64;
 
   /* Placeholder header; nrec patched at the end.  */
   long hdr_off = ftell (fp);

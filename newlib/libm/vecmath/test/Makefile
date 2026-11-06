@@ -39,6 +39,8 @@ $(TESTDIR)/shim/vecmath.h: $(SRCROOT)/libc/include/vecmath.h
 # Library sources under test.
 VECSRCS := $(wildcard $(VECDIR)/v*.c) $(wildcard $(VECDIR)/tables/*.c)
 VECHDRS := $(wildcard $(VECDIR)/include/*.h) $(wildcard $(VECDIR)/include/*.inc) \
+	   $(wildcard $(VECDIR)/include/f32/*.h) \
+	   $(wildcard $(VECDIR)/include/f32/*.inc) \
 	   $(wildcard $(VECDIR)/*.h) $(SRCROOT)/libc/include/vecmath.h
 RUNSRCS := $(TESTDIR)/runner/runner.c $(TESTDIR)/runner/ulp.c
 RUNHDRS := $(wildcard $(TESTDIR)/include/*.h) $(wildcard $(TESTDIR)/include/*.def) \

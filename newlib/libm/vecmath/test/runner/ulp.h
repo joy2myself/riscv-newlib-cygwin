@@ -28,4 +28,12 @@ ulp_verdict_t ulp_eval2 (double y2, const vmb_rec2_t *r2, uint32_t expect);
    returns a huge value when either is not finite or classes differ.  */
 double ulp_distance (double got, double want);
 
+/* ---- binary32 (float) variants -- see vmblob.h for the record
+   encoding: every field carries the binary32 bit pattern in its low 32
+   bits.  Same conventions with 24-bit significand, 8-bit exponent,
+   FLT_TRUE_MIN = 2^-149 as the subnormal ulp unit.  ---- */
+ulp_verdict_t ulp_eval_f32 (float y, const vmb_rec1_t *r);
+ulp_verdict_t ulp_eval2_f32 (float y2, const vmb_rec2_t *r2, uint32_t expect);
+double ulp_distance_f32 (float got, float want);
+
 #endif /* ULP_H */
