@@ -45,6 +45,10 @@ include %D%/math/Makefile.inc
 endif
 include %D%/common/Makefile.inc
 
+if NEWLIB_VECMATH
+include %D%/vecmath/Makefile.inc
+endif # NEWLIB_VECMATH
+
 if HAVE_FPMATH_H
 include %D%/ld/Makefile.inc
 endif # HAVE_FPMATH_H

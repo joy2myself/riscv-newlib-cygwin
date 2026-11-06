@@ -74,6 +74,9 @@ AM_CPPFLAGS = $(NEWLIB_CFLAGS) $(TARGET_CFLAGS) $(AM_CPPFLAGS_$(subst /,_,$(@D))
 
 toollib_LIBRARIES = libm.a \
 	libc.a
+if NEWLIB_VECMATH
+toollib_LIBRARIES += libvecmath.a
+endif
 noinst_DATA += libg.a
 if HAVE_MULTISUBDIR
 BUILD_MULTISUBDIR = $(builddir)$(MULTISUBDIR)
@@ -81,6 +84,18 @@ if HAVE_CRT0
 noinst_DATA += $(BUILD_MULTISUBDIR)/$(CRT0)
 endif
 noinst_DATA += $(BUILD_MULTISUBDIR)/libc.a $(BUILD_MULTISUBDIR)/libm.a
+if NEWLIB_VECMATH
+noinst_DATA += $(BUILD_MULTISUBDIR)/libvecmath.a
+endif
+endif
+
+## Headers of the vector math library (kernel templates and inline-kernel
+## API), installed next to the standard include files when --enable-vecmath.
+if NEWLIB_VECMATH
+VECMATH_HDRS = $(wildcard $(srcdir)/libm/vecmath/include/*.h) \
+	$(wildcard $(srcdir)/libm/vecmath/include/*.inc)
+else
+VECMATH_HDRS =
 endif
 
 toollib_DATA = $(CRT0) $(CRT1)
@@ -168,6 +183,21 @@ libm.a: $(libm_a_OBJECTS) $(libm_a_DEPENDENCIES)
 	  $(AR) $(ARFLAGS) $@ $$objs
 	$(AM_V_at)$(RANLIB) $@
 
+## libvecmath.a -- RISC-V RVV vector math library (--enable-vecmath).
+## Sources are appended by libm/vecmath/Makefile.inc.  The library is only
+## referenced from toollib_LIBRARIES when NEWLIB_VECMATH is true.
+libvecmath_a_SOURCES =
+libvecmath_a_CFLAGS = $(AM_CFLAGS) $(libvecmath_a_CFLAGS_$(subst /,_,$(@D))) $(libvecmath_a_CFLAGS_$(subst /,_,$(@D)_$(<F)))
+libvecmath_a_CCASFLAGS = $(AM_CCASFLAGS) $(libvecmath_a_CCASFLAGS_$(subst /,_,$(@D))) $(libvecmath_a_CCASFLAGS_$(subst /,_,$(@D)_$(<F)))
+libvecmath_a_CPPFLAGS = $(AM_CPPFLAGS) -I$(srcdir)/libm/common -I$(srcdir)/libm/vecmath/include $(libvecmath_a_CPPFLAGS_$(subst /,_,$(@D))) $(libvecmath_a_CPPFLAGS_$(subst /,_,$(@D)_$(<F)))
+$(libvecmath_a_OBJECTS): stmp-targ-include
+
+libvecmath.a: $(libvecmath_a_OBJECTS) $(libvecmath_a_DEPENDENCIES)
+	$(AM_V_at)rm -f $@
+	$(AM_V_AR)objs=`echo $(libvecmath_a_OBJECTS) | $(AWK_UNIQUE_OBJS)` || exit $$?; \
+	  $(AR) $(ARFLAGS) $@ $$objs
+	$(AM_V_at)$(RANLIB) $@
+
 if HAVE_MULTISUBDIR
 $(BUILD_MULTISUBDIR):
 	$(AM_V_at)$(MKDIR_P) $@
@@ -187,6 +217,12 @@ $(BUILD_MULTISUBDIR)/libg.a: libg.a ${BUILD_MULTISUBDIR}
 $(BUILD_MULTISUBDIR)/libm.a: libm.a $(BUILD_MULTISUBDIR)
 	$(AM_V_at)rm -f $@
 	$(AM_V_GEN)ln $< $@ >/dev/null 2>/dev/null || cp $< $@
+
+if NEWLIB_VECMATH
+$(BUILD_MULTISUBDIR)/libvecmath.a: libvecmath.a $(BUILD_MULTISUBDIR)
+	$(AM_V_at)rm -f $@
+	$(AM_V_GEN)ln $< $@ >/dev/null 2>/dev/null || cp $< $@
+endif
 endif
 
 crt0.o: $(CRT0_DIR)$(CRT0)
@@ -263,6 +299,9 @@ install-data-local: install-toollibLIBRARIES install-multi $(INSTALL_DATA_LOCAL)
 	-if [ -z "$(MULTISUBDIR)" ]; then \
 	  $(mkinstalldirs) $(DESTDIR)$(tooldir)/include; \
 	  for i in $(srcdir)/libc/include/*.h; do \
+	   $(INSTALL_DATA) $$i $(DESTDIR)$(tooldir)/include/`basename $$i`; \
+	  done; \
+	  for i in $(VECMATH_HDRS); do \
 	   $(INSTALL_DATA) $$i $(DESTDIR)$(tooldir)/include/`basename $$i`; \
 	  done; \
 	  $(INSTALL_DATA) newlib.h $(DESTDIR)$(tooldir)/include/newlib.h; \
