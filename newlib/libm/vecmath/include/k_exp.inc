@@ -117,7 +117,7 @@ VM_KFN (exp) (vm_f_t x, size_t vl, double (*fixup) (double))
   /* Tiny lanes: exactly 1.0 + x, flag-identical to scalar (guard lanes
      are overwritten by fixup below).  */
   y = VM_VFMERGE_VVM (y, VM_VFADD_VF (x, 1.0, vl), m_tiny, vl);
-  return VM_KFN (scalar_fixup) (x, y, m_guard, vl, fixup);
+  return VM_FIXUP1 (x, y, m_guard, vl, fixup);
 }
 
 /* Double-double exp: (hi, lo) = exp(x) with the final scaling rounding
@@ -150,7 +150,7 @@ VM_KFN (exp) (vm_f_t x, size_t vl, double (*fixup) (double))
     (hi) = VM_VFMERGE_VVM ((hi), vmed_th, vmed_mtiny, (vl));		\
     (lo) = VM_VFMERGE_VVM ((lo), vmed_tl, vmed_mtiny, (vl));		\
   } while (0);								\
-  (hi) = VM_KFN (scalar_fixup) ((x), (hi), vmed_mguard, (vl), fixup);	\
+  (hi) = VM_FIXUP1 ((x), (hi), vmed_mguard, (vl), fixup);	\
   (lo) = VM_VFMERGE_VFM ((lo), 0.0, vmed_mguard, (vl));			\
 } while (0)
 
@@ -166,7 +166,7 @@ VM_KFN (exp2) (vm_f_t x, size_t vl, double (*fixup) (double))
   vm_f_t z = VM_VFMV_V_F (0.0, vl);
   vm_f_t y = VM_KFN (exp2_core) (xs, z, vl);
   y = VM_VFMERGE_VVM (y, VM_VFADD_VF (x, 1.0, vl), m_tiny, vl);
-  return VM_KFN (scalar_fixup) (x, y, m_guard, vl, fixup);
+  return VM_FIXUP1 (x, y, m_guard, vl, fixup);
 }
 
 /* exp10(x) = 10^x: t = x*log2(10) as (thi, tlo); exp2_core(thi, tlo).
@@ -191,5 +191,5 @@ VM_KFN (exp10) (vm_f_t x, size_t vl, double (*fixup) (double))
   /* 10^x for |x| < 2^-54 is exactly 1.0 (2^-54*ln10 < 2^-53), matching
      scalar pow(10,x); avoids core-path underflow flags on tiny lanes.  */
   y = VM_VFMERGE_VFM (y, 1.0, m_tiny, vl);
-  return VM_KFN (scalar_fixup) (x, y, m_guard, vl, fixup);
+  return VM_FIXUP1 (x, y, m_guard, vl, fixup);
 }

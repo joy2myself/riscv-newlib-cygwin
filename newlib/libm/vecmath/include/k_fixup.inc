@@ -49,3 +49,19 @@ VM_KFN (scalar_fixup2) (vm_f_t x, vm_f_t y, vm_f_t r, vm_b_t m, size_t vl,
   vm_f_t picked = VM_VLUXEI64 (rbuf, VM_VSLL_VX (idx, 3, vl), vl);
   return VM_VFMERGE_VVM (r, picked, m, vl);
 }
+
+/* Guarded entry points for the two epilogues above.  The call itself is
+   what costs: passing lm-group vectors by value makes the call site
+   spill its live vector registers and build a frame, roughly 40 ns per
+   element on the X60 even when the mask is empty.  A vfirst at the call
+   site keeps that off the hot path; the fallback value is the vector the
+   unguarded call would have returned unchanged.  */
+#define VM_FIXUP1(x_, y_, m_, vl_, fn_)					\
+  (VM_VFIRST_M ((m_), (vl_)) < 0					\
+   ? (y_)								\
+   : VM_KFN (scalar_fixup) ((x_), (y_), (m_), (vl_), (fn_)))
+
+#define VM_FIXUP2(x_, y_, r_, m_, vl_, fn_)				\
+  (VM_VFIRST_M ((m_), (vl_)) < 0					\
+   ? (r_)								\
+   : VM_KFN (scalar_fixup2) ((x_), (y_), (r_), (m_), (vl_), (fn_)))
