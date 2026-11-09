@@ -22,6 +22,7 @@
 #define VM32_LMUL 2
 #include <f32/compat.h>
 #include <f32/wrap.h>
+#include <f32/k_exp.inc>
 #include <f32/k_hyper.inc>
 
 void

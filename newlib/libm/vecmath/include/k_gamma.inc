@@ -695,13 +695,13 @@ static const double vm_gam_expP[15][2] = {
 /* ---- the three entry kernels ---------------------------------------- */
 
 /* lgamma(x): the value alone.  */
-#define VM_GAM_LGAMMA(h, l, x, vl) do {					\
+#define VM_GAM_LGAMMA_SLOW(h, l, x, vl) do {					\
   vm_b_t vgz_m;								\
   VM_GAM_LGAM (h, l, vgz_m, (x), (vl));					\
 } while (0)
 
 /* lgamma_r(x, &sign): the value and sign(Gamma(x)) as +-1.  */
-#define VM_GAM_LGAMMA_R(h, l, sgn, x, vl) do {				\
+#define VM_GAM_LGAMMA_R_SLOW(h, l, sgn, x, vl) do {				\
   vm_b_t vgz_m;								\
   vm_f_t vgz_s;								\
   VM_GAM_LGAM (h, l, vgz_m, (x), (vl));					\
@@ -713,7 +713,7 @@ static const double vm_gam_expP[15][2] = {
    The poles need care lgamma does not: C99 wants tgamma(negative integer) =
    NaN with INVALID, where exp(lgamma) would give +Inf with DIVBYZERO.  Those
    lanes get a benign argument and a patched masked 0*Inf.  */
-#define VM_GAM_TGAMMA(h, l, x, vl) do {					\
+#define VM_GAM_TGAMMA_SLOW(h, l, x, vl) do {					\
   vm_f_t vgt_y0, vgt_y1, vgt_rr, vgt_xs;				\
   vm_i64_t vgt_q64;							\
   vm_b_t vgt_mint, vgt_mpole;						\
@@ -759,6 +759,367 @@ static const double vm_gam_expP[15][2] = {
     (h) = VM_VFMERGE_VVM ((h), vgt_np, vgt_mpole, (vl));		\
     (l) = VM_VFMERGE_VFM ((l), 0.0, vgt_mpole, (vl));			\
   }									\
+} while (0)
+
+
+
+#ifndef VM_GAMMA_FAST_DATA
+#define VM_GAMMA_FAST_DATA
+/* fdlibm e_lgamma_r.c coefficient tables (low index = constant term).  */
+static const double vm_gam_a[12] = {
+  7.72156649015328655494e-02, 3.22467033424113591611e-01,
+  6.73523010531292681824e-02, 2.05808084325167332806e-02,
+  7.38555086081402883957e-03, 2.89051383673415629091e-03,
+  1.19270763183362067845e-03, 5.10069792153511336608e-04,
+  2.20862790713908385557e-04, 1.08011567247583939954e-04,
+  2.52144565451257326939e-05, 4.48640949618915160150e-05,
+};
+static const double vm_gam_t[15] = {
+  4.83836122723810047042e-01, -1.47587722994593911752e-01,
+  6.46249402391333854778e-02, -3.27885410759859649565e-02,
+  1.79706750811820387126e-02, -1.03142241298341437450e-02,
+  6.10053870246291332635e-03, -3.68452016781138256760e-03,
+  2.25964780900612472250e-03, -1.40346469989232843813e-03,
+  8.81081882437654011382e-04, -5.38595305356740546715e-04,
+  3.15632070903625950361e-04, -3.12754168375120860518e-04,
+  3.35529192635519073543e-04,
+};
+static const double vm_gam_u[6] = {
+  -7.72156649015328655494e-02, 6.32827064025093366517e-01,
+  1.45492250137234768737e+00, 9.77717527963372745603e-01,
+  2.28963728064692451092e-01, 1.33810918536787660377e-02,
+};
+static const double vm_gam_v[5] = {
+  2.45597793713041134822e+00, 2.12848976379893395361e+00,
+  7.69285150456672783825e-01, 1.04222645593369134254e-01,
+  3.21709242282423911810e-03,
+};
+static const double vm_gam_s[7] = {
+  -7.72156649015328655494e-02, 2.14982415960608852501e-01,
+  3.25778796408930981787e-01, 1.46350472652464452805e-01,
+  2.66422703033638609560e-02, 1.84028451407337715652e-03,
+  3.19475326584100867617e-05,
+};
+static const double vm_gam_r[6] = {
+  1.39200533467621045958e+00, 7.21935547567138069525e-01,
+  1.71933865632803078993e-01, 1.86459191715652901344e-02,
+  7.77942496381893596434e-04, 7.32668430744625636189e-06,
+};
+#define VM_GAM_TC	1.46163214496836224576e+00
+#define VM_GAM_TF	-1.21486290535849611461e-01
+#define VM_GAM_TT	-3.63867699703950536541e-18
+#define VM_GAM_B8	0x4020000000000000ULL	/* 8.0 */
+#define VM_GAM_B2	0x4000000000000000ULL	/* 2.0 */
+#define VM_GAM_B05	0x3fe0000000000000ULL	/* 0.5 */
+#define VM_GAM_B0898	0x3feccccc00000000ULL	/* 0.8984375 */
+#define VM_GAM_B0732	0x3fe7694400000000ULL	/* 0.7316 */
+#define VM_GAM_B0232	0x3fcda66100000000ULL	/* 0.2316 */
+#define VM_GAM_B1732	0x3ffbb4c300000000ULL	/* 1.7316 */
+#define VM_GAM_B1231	0x3ff3b4c400000000ULL	/* 1.2307 */
+#define VM_GAM_BSQRT2	0x3ff6a09e667f3bcdULL	/* sqrt(2) */
+#endif /* VM_GAMMA_FAST_DATA */
+
+#ifndef VM_GAMMA_LOGD
+#define VM_GAMMA_LOGD
+/* (lh, ll) = log(x), normal x > 0, to ~4e-18 absolute.  */
+#define VM_GAM_LOGD(lh, ll, x, vl) do {					\
+  vm_u64_t vgl_ix = VM_BITS (x);					\
+  vm_i64_t vgl_k = VM_REINT_U_I (					\
+    VM_VSUB_VX (VM_VSRL_VX (vgl_ix, 52, (vl)), 1023, (vl)));		\
+  vm_f_t vgl_kd = VM_VFCVT_F_X_V (vgl_k, (vl));			\
+  vm_f_t vgl_m = VM_FROM_BITS (						\
+    VM_VSUB_VV (vgl_ix, VM_VSLL_VX (VM_REINT_I_U (vgl_k), 52, (vl)), (vl))); \
+  /* m in [1,2) -> [1/sqrt2, sqrt2) halves the atanh series range */	\
+  vm_b_t vgl_big = VM_VMSGEU_VX (VM_BITS (vgl_m), VM_GAM_BSQRT2, (vl)); \
+  vgl_m = VM_VFMERGE_VVM (vgl_m, VM_VFMUL_VF (vgl_m, 0.5, (vl)),	\
+			  vgl_big, (vl));				\
+  vgl_kd = VM_VFADD_VV (vgl_kd,						\
+			VM_VFMERGE_VFM (VM_VFMV_V_F (0.0, (vl)), 1.0,	\
+					vgl_big, (vl)), (vl));		\
+  vm_f_t vgl_t1 = VM_VFSUB_VF (vgl_m, 1.0, (vl));			\
+  vm_f_t vgl_t2 = VM_VFADD_VF (vgl_m, 1.0, (vl));			\
+  vm_f_t vgl_rc = VM_VFRDIV_VF (vgl_t2, 1.0, (vl));			\
+  vm_f_t vgl_q = VM_VFMUL_VV (vgl_t1, vgl_rc, (vl));			\
+  vm_f_t vgl_e = VM_VFNMSAC_VV (vgl_t1, vgl_q, vgl_t2, (vl));		\
+  vm_f_t vgl_uc = VM_VFMUL_VV (vgl_e, vgl_rc, (vl));			\
+  vm_f_t vgl_q2 = VM_VFMUL_VV (vgl_q, vgl_q, (vl));			\
+  /* C = 2(q^3/3 + q^5/5 + ... + q^23/23), |q| <= 0.1716 */		\
+  vm_f_t vgl_c = VM_VFMV_V_F (1.0 / 23.0, (vl));			\
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 21.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 19.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 17.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 15.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 13.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 11.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 9.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 7.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 5.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 3.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMUL_VF (VM_VFMUL_VV (VM_VFMUL_VV (vgl_q2, vgl_q, (vl)),	\
+				    vgl_c, (vl)), 2.0, (vl));		\
+  vm_f_t vgl_h, vgl_se;							\
+  VM_TWO_SUM (vgl_h, vgl_se,						\
+	      VM_VFMUL_VF (vgl_kd, VM_GAM_LN2H, (vl)),			\
+	      VM_VFADD_VV (vgl_q, vgl_q, (vl)), (vl));			\
+  (ll) = VM_VFADD_VV (							\
+    VM_VFADD_VV (vgl_se, vgl_c, (vl)),					\
+    VM_VFADD_VV (VM_VFMACC_VF (vgl_uc, VM_GAM_LN2L, vgl_kd, (vl)),	\
+		 vgl_uc, (vl)), (vl));				\
+  (lh) = vgl_h;								\
+} while (0)
+#endif /* VM_GAMMA_LOGD */
+
+/* ================================================================== */
+/* Fast path: 0.5 <= x < 8 (the whole benchmark domain).  Compact dd    */
+/* lgamma from fdlibm e_lgamma_r.c with the atanh-form dd log above.    */
+/* Strips containing any lane outside that range run the dd-era kernel  */
+/* above instead (correct, slower); the benchmark never takes it.       */
+/* ================================================================== */
+
+/* log(x) = lh + ll for normal x, ~4e-18 absolute (see above).  */
+#define VM_GAM_LOGD(lh, ll, x, vl) do {					\
+  vm_u64_t vgl_ix = VM_BITS (x);					\
+  vm_i64_t vgl_k = VM_REINT_U_I (					\
+    VM_VSUB_VX (VM_VSRL_VX (vgl_ix, 52, (vl)), 1023, (vl)));		\
+  vm_f_t vgl_kd = VM_VFCVT_F_X_V (vgl_k, (vl));			\
+  vm_f_t vgl_m = VM_FROM_BITS (						\
+    VM_VSUB_VV (vgl_ix, VM_VSLL_VX (VM_REINT_I_U (vgl_k), 52, (vl)), (vl))); \
+  /* m in [1,2) -> [1/sqrt2, sqrt2) halves the atanh series range */	\
+  vm_b_t vgl_big = VM_VMSGEU_VX (VM_BITS (vgl_m), VM_GAM_BSQRT2, (vl)); \
+  vgl_m = VM_VFMERGE_VVM (vgl_m, VM_VFMUL_VF (vgl_m, 0.5, (vl)),	\
+			  vgl_big, (vl));				\
+  vgl_kd = VM_VFADD_VV (vgl_kd,						\
+			VM_VFMERGE_VFM (VM_VFMV_V_F (0.0, (vl)), 1.0,	\
+					vgl_big, (vl)), (vl));		\
+  vm_f_t vgl_t1 = VM_VFSUB_VF (vgl_m, 1.0, (vl));			\
+  vm_f_t vgl_t2 = VM_VFADD_VF (vgl_m, 1.0, (vl));			\
+  vm_f_t vgl_rc = VM_VFRDIV_VF (vgl_t2, 1.0, (vl));			\
+  vm_f_t vgl_q = VM_VFMUL_VV (vgl_t1, vgl_rc, (vl));			\
+  vm_f_t vgl_e = VM_VFNMSAC_VV (vgl_t1, vgl_q, vgl_t2, (vl));		\
+  vm_f_t vgl_uc = VM_VFMUL_VV (vgl_e, vgl_rc, (vl));			\
+  vm_f_t vgl_q2 = VM_VFMUL_VV (vgl_q, vgl_q, (vl));			\
+  /* C = 2(q^3/3 + q^5/5 + ... + q^23/23), |q| <= 0.1716 */		\
+  vm_f_t vgl_c = VM_VFMV_V_F (1.0 / 23.0, (vl));			\
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 21.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 19.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 17.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 15.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 13.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 11.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 9.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 7.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 5.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 3.0, (vl)), vgl_c, vgl_q2, (vl)); \
+  vgl_c = VM_VFMUL_VF (VM_VFMUL_VV (VM_VFMUL_VV (vgl_q2, vgl_q, (vl)),	\
+				    vgl_c, (vl)), 2.0, (vl));		\
+  vm_f_t vgl_h, vgl_se;							\
+  VM_TWO_SUM (vgl_h, vgl_se,						\
+	      VM_VFMUL_VF (vgl_kd, VM_GAM_LN2H, (vl)),			\
+	      VM_VFADD_VV (vgl_q, vgl_q, (vl)), (vl));			\
+  (ll) = VM_VFADD_VV (							\
+    VM_VFADD_VV (vgl_se, vgl_c, (vl)),					\
+    VM_VFADD_VV (VM_VFMACC_VF (vgl_uc, VM_GAM_LN2L, vgl_kd, (vl)),	\
+		 vgl_uc, (vl)), (vl));				\
+  (lh) = vgl_h;								\
+} while (0)
+
+/* A = lgamma(x) as normalized dd, for x in [0.5, 8) (all lanes; x is
+   sanitized to 1.0 outside).  */
+#define VM_GAM_LFAST(h, l, x, vl) do {					\
+  vm_u64_t vgf_bx = VM_BITS (x);					\
+  vm_b_t vgf_lt2 = VM_VMSLTU_VX (vgf_bx, VM_GAM_B2, (vl));		\
+  vm_b_t vgf_lt0898 = VM_VMSLTU_VX (vgf_bx, VM_GAM_B0898, (vl));	\
+  vm_b_t vgf_ge2 = VM_VMNOT_M (vgf_lt2, (vl));				\
+  vm_b_t vgf_n0898 = VM_VMNOT_M (vgf_lt0898, (vl));			\
+  vm_b_t vgf_c0 = VM_VMAND_MM (vgf_lt0898,				\
+			       VM_VMSGEU_VX (vgf_bx, VM_GAM_B0732, (vl)), (vl)); \
+  vm_b_t vgf_c1 = VM_VMAND_MM (vgf_lt0898,				\
+			       VM_VMAND_MM (VM_VMSLTU_VX (vgf_bx, VM_GAM_B0732, (vl)), \
+					    VM_VMSGEU_VX (vgf_bx, VM_GAM_B0232, (vl)), (vl)), (vl)); \
+  vm_b_t vgf_c2 = VM_VMAND_MM (vgf_lt0898,				\
+			       VM_VMSLTU_VX (vgf_bx, VM_GAM_B0232, (vl)), (vl)); \
+  vm_b_t vgf_m0 = VM_VMAND_MM (vgf_n0898, vgf_lt2, (vl));		\
+  vgf_c0 = VM_VMOR_MM (vgf_c0, VM_VMAND_MM (vgf_m0,			\
+			  VM_VMSGEU_VX (vgf_bx, VM_GAM_B1732, (vl)), (vl)), (vl)); \
+  vgf_c1 = VM_VMOR_MM (vgf_c1, VM_VMAND_MM (vgf_m0,			\
+			  VM_VMAND_MM (VM_VMSLTU_VX (vgf_bx, VM_GAM_B1732, (vl)), \
+				       VM_VMSGEU_VX (vgf_bx, VM_GAM_B1231, (vl)), (vl)), (vl)), (vl)); \
+  vgf_c2 = VM_VMOR_MM (vgf_c2, VM_VMAND_MM (vgf_m0,			\
+			  VM_VMSLTU_VX (vgf_bx, VM_GAM_B1231, (vl)), (vl)), (vl)); \
+  /* y for the three <2 cases (1-x / 2-x, x-(tc-1) / x-tc, x / x-1) */	\
+  vm_f_t vgf_y0 = VM_VFMERGE_VVM (VM_VFRSUB_VF (x, 2.0, (vl)),		\
+				  VM_VFRSUB_VF (x, 1.0, (vl)), vgf_lt0898, (vl)); \
+  vm_f_t vgf_y1 = VM_VFMERGE_VVM (VM_VFSUB_VF (x, VM_GAM_TC, (vl)),	\
+				  VM_VFSUB_VF (x, VM_GAM_TC - 1.0, (vl)), vgf_lt0898, (vl)); \
+  vm_f_t vgf_y2 = VM_VFMERGE_VVM (VM_VFSUB_VF (x, 1.0, (vl)), x,	\
+				  vgf_lt0898, (vl));			\
+  /* ---- case 0: term = y*p1 + p2 - 0.5y ---- */			\
+  vm_f_t vgf_z0 = VM_VFMUL_VV (vgf_y0, vgf_y0, (vl));			\
+  vm_f_t vgf_p1 = VM_VFMV_V_F (vm_gam_a[10], (vl));			\
+  vm_f_t vgf_p2, vgf_t0, vgf_t1, vgf_t2, vgf_term;			\
+  vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[8], (vl)), vgf_p1, vgf_z0, (vl)); \
+  vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[6], (vl)), vgf_p1, vgf_z0, (vl)); \
+  vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[4], (vl)), vgf_p1, vgf_z0, (vl)); \
+  vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[2], (vl)), vgf_p1, vgf_z0, (vl)); \
+  vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[0], (vl)), vgf_p1, vgf_z0, (vl)); \
+  vgf_p2 = VM_VFMV_V_F (vm_gam_a[11], (vl));				\
+  vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[9], (vl)), vgf_p2, vgf_z0, (vl)); \
+  vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[7], (vl)), vgf_p2, vgf_z0, (vl)); \
+  vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[5], (vl)), vgf_p2, vgf_z0, (vl)); \
+  vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[3], (vl)), vgf_p2, vgf_z0, (vl)); \
+  vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[1], (vl)), vgf_p2, vgf_z0, (vl)); \
+  vgf_p2 = VM_VFMUL_VV (vgf_z0, vgf_p2, (vl));				\
+  vgf_t0 = VM_VFSUB_VV (VM_VFMACC_VV (vgf_p2, vgf_y0, vgf_p1, (vl)),	\
+			VM_VFMUL_VF (vgf_y0, 0.5, (vl)), (vl));		\
+  /* ---- case 1: term = tf + z*p1 - (tt - w*(p2 + y*p3)) ---- */	\
+  {									\
+    vm_f_t vgf_z1 = VM_VFMUL_VV (vgf_y1, vgf_y1, (vl));		\
+    vm_f_t vgf_yw = VM_VFMUL_VV (vgf_z1, vgf_y1, (vl));		\
+    vm_f_t vgf_q1 = VM_VFMV_V_F (vm_gam_t[12], (vl));			\
+    vm_f_t vgf_q2, vgf_q3, vgf_in;					\
+    vgf_q1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[9], (vl)), vgf_q1, vgf_yw, (vl)); \
+    vgf_q1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[6], (vl)), vgf_q1, vgf_yw, (vl)); \
+    vgf_q1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[3], (vl)), vgf_q1, vgf_yw, (vl)); \
+    vgf_q1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[0], (vl)), vgf_q1, vgf_yw, (vl)); \
+    vgf_q2 = VM_VFMV_V_F (vm_gam_t[13], (vl));				\
+    vgf_q2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[10], (vl)), vgf_q2, vgf_yw, (vl)); \
+    vgf_q2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[7], (vl)), vgf_q2, vgf_yw, (vl)); \
+    vgf_q2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[4], (vl)), vgf_q2, vgf_yw, (vl)); \
+    vgf_q2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[1], (vl)), vgf_q2, vgf_yw, (vl)); \
+    vgf_q3 = VM_VFMV_V_F (vm_gam_t[14], (vl));				\
+    vgf_q3 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[11], (vl)), vgf_q3, vgf_yw, (vl)); \
+    vgf_q3 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[8], (vl)), vgf_q3, vgf_yw, (vl)); \
+    vgf_q3 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[5], (vl)), vgf_q3, vgf_yw, (vl)); \
+    vgf_q3 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[2], (vl)), vgf_q3, vgf_yw, (vl)); \
+    vgf_in = VM_VFMACC_VV (vgf_q2, vgf_y1, vgf_q3, (vl));		\
+    vgf_in = VM_VFSUB_VV (VM_VFMV_V_F (VM_GAM_TT, (vl)),		\
+			  VM_VFMUL_VV (vgf_yw, vgf_in, (vl)), (vl));	\
+    vgf_t1 = VM_VFMACC_VV (VM_VFRSUB_VF (vgf_in, VM_GAM_TF, (vl)),	\
+			   vgf_z1, vgf_q1, (vl));			\
+  }									\
+  /* ---- case 2: term = -0.5y + p1/p2 ---- */				\
+  {									\
+    vm_f_t vgf_pu = VM_VFMV_V_F (vm_gam_u[5], (vl));			\
+    vm_f_t vgf_pv = VM_VFMV_V_F (vm_gam_v[4], (vl));			\
+    vgf_pu = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_u[4], (vl)), vgf_pu, vgf_y2, (vl)); \
+    vgf_pu = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_u[3], (vl)), vgf_pu, vgf_y2, (vl)); \
+    vgf_pu = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_u[2], (vl)), vgf_pu, vgf_y2, (vl)); \
+    vgf_pu = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_u[1], (vl)), vgf_pu, vgf_y2, (vl)); \
+    vgf_pu = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_u[0], (vl)), vgf_pu, vgf_y2, (vl)); \
+    vgf_pu = VM_VFMUL_VV (vgf_pu, vgf_y2, (vl));			\
+    vgf_pv = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_v[3], (vl)), vgf_pv, vgf_y2, (vl)); \
+    vgf_pv = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_v[2], (vl)), vgf_pv, vgf_y2, (vl)); \
+    vgf_pv = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_v[1], (vl)), vgf_pv, vgf_y2, (vl)); \
+    vgf_pv = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_v[0], (vl)), vgf_pv, vgf_y2, (vl)); \
+    vgf_pv = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), vgf_y2, vgf_pv, (vl)); \
+    vgf_t2 = VM_VFSUB_VV (VM_VFDIV_VV (vgf_pu, vgf_pv, (vl)),		\
+			  VM_VFMUL_VF (vgf_y2, 0.5, (vl)), (vl));	\
+  }									\
+  vgf_term = VM_VFMERGE_VVM (vgf_t1, vgf_t2, vgf_c2, (vl));		\
+  vgf_term = VM_VFMERGE_VVM (vgf_term, vgf_t0, vgf_c0, (vl));		\
+  vgf_term = VM_VFMERGE_VVM (vgf_term, vgf_t1, vgf_c1, (vl));		\
+  /* ---- [2,8): term = 0.5y + Sp(y)/Rp(y), log of (y+2)...(y+i-1) ---- */ \
+  {									\
+    vm_i64_t vgf_i = VM_VFCVT_RTZ_X_F_V (x, (vl));			\
+    vm_f_t vgf_id = VM_VFCVT_F_X_V (vgf_i, (vl));			\
+    vm_f_t vgf_y3 = VM_VFSUB_VV (x, vgf_id, (vl));			\
+    vm_f_t vgf_ps = VM_VFMV_V_F (vm_gam_s[6], (vl));			\
+    vm_f_t vgf_pq = VM_VFMV_V_F (vm_gam_r[5], (vl));			\
+    vgf_ps = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_s[5], (vl)), vgf_ps, vgf_y3, (vl)); \
+    vgf_ps = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_s[4], (vl)), vgf_ps, vgf_y3, (vl)); \
+    vgf_ps = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_s[3], (vl)), vgf_ps, vgf_y3, (vl)); \
+    vgf_ps = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_s[2], (vl)), vgf_ps, vgf_y3, (vl)); \
+    vgf_ps = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_s[1], (vl)), vgf_ps, vgf_y3, (vl)); \
+    vgf_ps = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_s[0], (vl)), vgf_ps, vgf_y3, (vl)); \
+    vgf_ps = VM_VFMUL_VV (vgf_y3, vgf_ps, (vl));			\
+    vgf_pq = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_r[4], (vl)), vgf_pq, vgf_y3, (vl)); \
+    vgf_pq = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_r[3], (vl)), vgf_pq, vgf_y3, (vl)); \
+    vgf_pq = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_r[2], (vl)), vgf_pq, vgf_y3, (vl)); \
+    vgf_pq = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_r[1], (vl)), vgf_pq, vgf_y3, (vl)); \
+    vgf_pq = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_r[0], (vl)), vgf_pq, vgf_y3, (vl)); \
+    vgf_pq = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), vgf_y3, vgf_pq, (vl)); \
+    vgf_t2 = VM_VFADD_VV (VM_VFMUL_VF (vgf_y3, 0.5, (vl)),		\
+			  VM_VFDIV_VV (vgf_ps, vgf_pq, (vl)), (vl));	\
+    vgf_term = VM_VFMERGE_VVM (vgf_term, vgf_t2, vgf_ge2, (vl));	\
+    /* zprod = (y+2)(y+3)...(y+i-1), masked multiplies */		\
+    vm_f_t vgf_zp = VM_VFMV_V_F (1.0, (vl));				\
+    vm_f_t vgf_m2 = VM_VFADD_VF (vgf_y3, 2.0, (vl));			\
+    vm_f_t vgf_m3 = VM_VFADD_VF (vgf_y3, 3.0, (vl));			\
+    vm_f_t vgf_m4 = VM_VFADD_VF (vgf_y3, 4.0, (vl));			\
+    vm_f_t vgf_m5 = VM_VFADD_VF (vgf_y3, 5.0, (vl));			\
+    vm_f_t vgf_m6 = VM_VFADD_VF (vgf_y3, 6.0, (vl));			\
+    vgf_zp = VM_VFMUL_VV_MU (VM_VMSGT_VX (vgf_i, 2, (vl)), vgf_zp, vgf_zp, vgf_m2, (vl)); \
+    vgf_zp = VM_VFMUL_VV_MU (VM_VMSGT_VX (vgf_i, 3, (vl)), vgf_zp, vgf_zp, vgf_m3, (vl)); \
+    vgf_zp = VM_VFMUL_VV_MU (VM_VMSGT_VX (vgf_i, 4, (vl)), vgf_zp, vgf_zp, vgf_m4, (vl)); \
+    vgf_zp = VM_VFMUL_VV_MU (VM_VMSGT_VX (vgf_i, 5, (vl)), vgf_zp, vgf_zp, vgf_m5, (vl)); \
+    vgf_zp = VM_VFMUL_VV_MU (VM_VMSGT_VX (vgf_i, 6, (vl)), vgf_zp, vgf_zp, vgf_m6, (vl)); \
+    /* log argument: zprod for x>=2, x for x<0.8984, 1 otherwise */	\
+    vm_f_t vgf_larg = VM_VFMERGE_VVM (x, vgf_zp, vgf_ge2, (vl));	\
+    vgf_larg = VM_VFMERGE_VVM (vgf_larg, VM_VFMV_V_F (1.0, (vl)),	\
+			       VM_VMAND_MM (vgf_n0898, vgf_lt2, (vl)), (vl)); \
+    vm_f_t vgf_lh, vgf_ll;						\
+    VM_GAM_LOGD (vgf_lh, vgf_ll, vgf_larg, (vl));			\
+    {									\
+      vm_f_t vgf_sg = VM_VFMERGE_VFM (VM_VFMV_V_F (1.0, (vl)), -1.0,	\
+				      vgf_lt2, (vl));			\
+      vgf_lh = VM_VFMUL_VV (vgf_lh, vgf_sg, (vl));			\
+      vgf_ll = VM_VFMUL_VV (vgf_ll, vgf_sg, (vl));			\
+    }									\
+    VM_DD_ADD ((h), (l), vgf_lh, vgf_ll, vgf_term, VM_VFMV_V_F (0.0, (vl)), (vl));		\
+  }									\
+} while (0)
+
+/* dd exp of (ah, al) for |A| < 512; returns exp = eh + el.  */
+#define VM_GAM_EXPDD_FAST(eh, el, ah, al, vl) do {				\
+  vm_f_t vge_s, vge_t, vge_q, vge_e1;					\
+  VM_EXP_MAIN (vge_s, vge_t, (ah), (vl));				\
+  vge_q = VM_VFMUL_VV (vge_s, vge_t, (vl));				\
+  vge_e1 = VM_VFNEG_V (VM_VFNMSAC_VV (vge_q, vge_s, vge_t, (vl)), (vl)); \
+  {									\
+    vm_f_t vge_sh, vge_se, vge_te, vge_fh, vge_fl;			\
+    VM_TWO_SUM (vge_sh, vge_se, vge_s, vge_q, (vl));			\
+    vge_te = VM_VFADD_VV (vge_se, vge_e1, (vl));			\
+    VM_TWO_SUM ((eh), (el), vge_sh, vge_te, (vl));			\
+    VM_TWO_SUM (vge_fh, vge_fl, VM_VFMV_V_F (1.0, (vl)), (al), (vl));	\
+    VM_DD_MUL ((eh), (el), (eh), (el), vge_fh, vge_fl, (vl));		\
+  }									\
+} while (0)
+
+/* 0 <= x < 8 and x > 0.5: fast path, otherwise the dd-era kernel.  */
+#define VM_GAM_FASTMASK(x, vl)						\
+  VM_VMSLTU_VX (VM_VSUB_VX (VM_BITS (x), VM_GAM_B05, (vl)),		\
+		VM_GAM_B8 - VM_GAM_B05, (vl))
+
+#define VM_GAM_LGAMMA(h, l, x, vl) do {					\
+  vm_b_t vgz_m;								\
+  if (VM_VFIRST_M (VM_VMNOT_M (VM_GAM_FASTMASK (x, (vl)), (vl)), (vl)) < 0) \
+    {									\
+      VM_GAM_LFAST (h, l, x, (vl));					\
+    }									\
+  else									\
+    VM_GAM_LGAMMA_SLOW (h, l, x, (vl));					\
+} while (0)
+
+#define VM_GAM_LGAMMA_R(h, l, sgn, x, vl) do {				\
+  vm_b_t vgz_m;								\
+  if (VM_VFIRST_M (VM_VMNOT_M (VM_GAM_FASTMASK (x, (vl)), (vl)), (vl)) < 0) \
+    {									\
+      VM_GAM_LFAST (h, l, x, (vl));					\
+      (sgn) = VM_VFMV_V_F (1.0, (vl));					\
+    }									\
+  else									\
+    VM_GAM_LGAMMA_R_SLOW (h, l, sgn, x, (vl));				\
+} while (0)
+
+#define VM_GAM_TGAMMA(h, l, x, vl) do {					\
+  if (VM_VFIRST_M (VM_VMNOT_M (VM_GAM_FASTMASK (x, (vl)), (vl)), (vl)) < 0) \
+    {									\
+      vm_f_t vgt_ah, vgt_al;						\
+      VM_GAM_LFAST (vgt_ah, vgt_al, x, (vl));				\
+      VM_GAM_EXPDD_FAST ((h), (l), vgt_ah, vgt_al, (vl));			\
+    }									\
+  else									\
+    VM_GAM_TGAMMA_SLOW (h, l, x, (vl));					\
 } while (0)
 
 /* ---- entry kernels (the VFABI wrappers call these) ------------------- */

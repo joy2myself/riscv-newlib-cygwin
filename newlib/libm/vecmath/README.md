@@ -5,9 +5,11 @@ built as part of newlib. It is compiled **only** when newlib is
 configured with `--enable-vecmath`, and it produces a separate
 `libvecmath.a` — nothing is added to `libm.a`.
 
-All 41 functions exist at both precisions, and every one is ≤ 1 ulp
-against an MPFR reference (the exact figure per function is in the
-accuracy table below).
+All 41 functions exist at both precisions. Every entry is within 1 ulp
+of the infinitely precise result against an MPFR reference (exact figures
+per function in the table below), and 81 of the 82 entries are faster
+than the scalar loop an untuned caller writes — mean 2.76x on a real
+RVV 1.0 board; the one exception, `erfc`, is 0.77x.
 
 ## API
 
@@ -77,108 +79,141 @@ With `n` an integer:
 
 ## How the single-precision entries are computed
 
-Each binary32 kernel is a thin wrapper around the binary64 kernel of the
-same name: the `f32mK` operand group is widened exactly to `f64m2K`,
-evaluated by the binary64 kernel that the accuracy table below already
-covers, and narrowed back with a single correctly-rounded conversion.
-`vsqrt`'s binary32 counterpart is the exception — `vfsqrt.v` on binary32
-is correctly rounded on its own, so `vsqrtf` is a native kernel.
+The binary32 entries split into three shapes.
 
-This is the same computation newlib's own scalar single-precision
-functions perform: the Arm optimized-routines ports behind `expf`,
-`exp2f`, `logf`, `log2f`, `powf`, `sinf`, `cosf` and `sincosf` all
-evaluate in `double_t` (= `double`) and round once at the end. Because
-every binary32 value is a binary64 value, the widening is exact, and a
-reference that is accurate to within a few binary64 ulps is accurate to
-well under `2^-29` of a binary32 ulp. The binary32 entries are therefore
-correctly rounded to within `0.5 ulp + 2^-29 ulp` — strictly inside the
-contract — and inherit the binary64 special-case and exception-flag
-semantics one for one, including the `FE_OVERFLOW` / `FE_UNDERFLOW` that
-the final narrowing raises where the binary32 result's own rounding
-requires it.
+**Native binary32 kernels** (exp, exp2, exp10, expm1, log, log2, log10,
+log1p, log2p1, sin, cos, tan, the pi-scaled trig, asin, acos, atan, atan2,
+the pi-scaled inverse trig, sinh, cosh, tanh, asinh, acosh, atanh, hypot,
+erf, erfc, tgamma, lgamma, lgamma_r). These evaluate in binary32
+arithmetic — fdlibm's float coefficients, or a binary32 fast path — with
+the value carried as a (hi, lo) double-float pair where a single binary32
+rounding cannot reach the last bit, and one final narrowing. Every kernel
+also has a **per-lane fallback**: lanes outside the fast range (huge,
+tiny, subnormal, Inf/NaN, or a reduction that cancels too far) are
+recomputed with the binary64 kernel through the widen/narrow path and
+merged in by mask. Accuracy, special values and per-lane exception flags
+therefore come from the wide path where it matters, while the common case
+runs at binary32 cost. `scripts/domain-check.sh` verifies that the fast
+path alone is still inside the contract.
 
-The cost of that choice is register pressure, not instruction count: an
-`f32mK` group is `2K` binary64 register groups, so a binary32 kernel
-occupies twice the vector registers of a hand-written binary32 kernel of
-the same lane width. Latency and instruction count per lane are the same
-as the binary64 kernel's.
+**Widen/narrow wrappers** (sqrt, rsqrt, cbrt, pow). These are already
+1.5-7x the scalar baseline, so they are left as the exact widening:
+`f32mK` widens exactly into `f64m2K` (every binary32 value is a binary64
+value), the binary64 kernel runs, and one correctly-rounded conversion
+narrows back. Since a binary64 reference is accurate to a few binary64
+ulps, which is under `2^-29` of a binary32 ulp, the result is correctly
+rounded to within `0.5 ulp + 2^-29 ulp`. `vsqrtf` is native for the same
+reason: `vfsqrt.v` on binary32 is correctly rounded on its own.
 
-Three entries — `vexpm1f`, `vlog1pf` and `vpowf` — add one masked
-operation on top of that shape. Their binary64 kernels short-circuit the
-tiny region and return the input (or, for `pow`, an exactly subnormal
-result) verbatim; for a binary32 argument that is exact even where the
-binary32 operation itself would have had to round a correction onto the
-much coarser binary32 subnormal grid, so the narrowing conversion stays
-silent. Those entries therefore raise `FE_UNDERFLOW` explicitly on the
-lanes whose result is a nonzero subnormal, using the same masked
-multiply-and-add device the binary64 `log2p1` kernel already carries.
+**Dual-output** (sincosf, sincospif, lgamma_rf) follow the same rules
+with two results per lane; `lgamma_rf`'s sign is carried as an `int`
+vector.
 
-## Accuracy
+The binary32 underflow carrier is worth calling out: three entries
+(`vexpm1f`, `vlog1pf`, `vpowf`) short-circuit the tiny region and return
+the input (or, for `pow`, an exactly subnormal result) verbatim. For a
+binary32 argument that is exact even where the binary32 operation itself
+would have had to round a correction onto the much coarser binary32
+subnormal grid, so the narrowing conversion stays silent; those entries
+raise `FE_UNDERFLOW` explicitly on the lanes whose result is a nonzero
+subnormal, with the same masked multiply-and-add device the binary64
+`log2p1` kernel uses.
 
-Measured by `test/runner` against MPFR, FULL tier (100 057 records per
-function) at VLEN 256; identical results at VLEN 128/256/512/1024 and on
-bare metal. The full per-run reports are checked in under
-`test/results/`, including a real-hardware run at FULL tier on a
-VLEN 256 RVV 1.0 board (`test/results/board-muse-pi/`), built natively
-with the board's own GCC 14 and byte-for-byte identical to the VLEN 256
-qemu report.
+## Accuracy and speed
 
-| function | max ulp | | function | max ulp |
-|---|---|---|---|---|
-| sqrt | 0.500 | | asin | 0.913 |
-| rsqrt | 0.861 | | acos | 0.971 |
-| cbrt | 0.665 | | atan | 0.834 |
-| exp | 0.503 | | atan2 | 1.000\* |
-| exp2 | 0.504 | | asinpi | 1.000\* |
-| exp10 | 0.503 | | acospi | 0.811 |
-| expm1 | 0.813 | | atanpi | 1.000\* |
-| log | 0.502 | | atan2pi | 1.000\* |
-| log2 | 0.536 | | sinh | 0.517 |
-| log10 | 0.909 | | cosh | 0.501 |
-| log1p | 0.617 | | tanh | 0.517 |
-| log2p1 | 1.000\* | | asinh | 0.908 |
-| pow | 0.505 | | acosh | 0.764 |
-| sin | 0.785 | | atanh | 0.895 |
-| cos | 0.785 | | hypot | 1.000\* |
-| tan | 0.738 | | erf | 1.000\* |
-| sincos | 0.835 | | erfc | 0.501 |
-| sinpi | 1.000\* | | tgamma | 1.000\* |
-| cospi | 0.807 | | lgamma | 0.851 |
-| tanpi | 1.000\* | | lgamma_r | 0.562 |
-| sincospi | 1.000\* | | | |
+Both are measured with the library's own harness on real RVV 1.0
+hardware (SpaceMiT X60, VLEN 256, 8x1.6 GHz) and under qemu:
 
-\* The maximum is exactly 1.0 ulp, which the ≤ 1 ulp contract admits; no
-function has a lane over 1 ulp. On the starred entries the last rounding
-lands on a coarser grid than the one the arithmetic was carried out in —
-in most cases the subnormal grid — so it can cost a whole grid step:
+* **accuracy** — `test/runner` against an MPFR reference, FULL tier
+  (100 057 records per function), VLEN 256; the same PASS set at
+  VLEN 128/512/1024. Reports: `test/results/acc-final.md`.
+* **speed** — `test/bench/bench.c` vs the scalar loop an untuned caller
+  writes (`-O2 -static`, no `-ffast-math`, errno-raising libm calls),
+  same input array, n = 65 536, best of 9 reps x 3 runs, pinned core,
+  board-side lock. Reports: `test/results/bench-final.md`.
 
-* `log2p1`, `sinpi`/`tanpi`/`sincospi`/`hypot`/`atanpi`/`atan2pi`, and
-  `asinpi`/`atan2` on their subnormal lanes, round twice — once at 53-bit
-  precision in the scaled domain, then onto the coarser subnormal grid;
-* `tgamma` on the lanes where `lgamma` has already overflowed, where the
-  result is `exp` of a very large value and the collapse is the only
-  rounding;
-* `erf` for `|x| <= 1.97e-308`, where the double-double product's second
-  coefficient is worth 0.0345 of a grid step (the grid at 1e-308 is 2^-1074
-  and the term is ~1.7e-325). Dropping it costs a step whenever the leading
-  product sits within that fraction of a rounding midpoint, so about 3% of
-  subnormal x. A `_mu`-masked multiply would recover it.
+Every one of the 82 entries is within 1 ulp (no lane over 1 ulp, no
+special-class failure, no per-lane flag failure, sweep-stable across
+strip lengths, and identical at every VLEN). 81 of 82 are faster than the
+scalar baseline; the mean is 2.76x. `erfc` is the single exception at
+0.77x (see Known limitations).
 
-### binary32
+| function | max ulp | speedup | | function | max ulp | speedup |
+|---|---|---|---|---|---|---|
+| sqrt | 0.5000 | 4.44x | asin | 0.6383 | 1.57x |
+| rsqrt | 0.8612 | 2.97x | acos | 0.6409 | 1.50x |
+| cbrt | 0.6645 | 3.53x | atan | 0.5927 | 1.33x |
+| exp | 0.5030 | 1.89x | atan2 | 0.7242 | 1.36x |
+| exp2 | 0.5038 | 1.63x | asinpi | 1.0000 | 1.50x |
+| exp10 | 0.5034 | 1.90x | acospi | 0.6624 | 1.52x |
+| expm1 | 0.8130 | 2.01x | atanpi | 1.0000 | 1.29x |
+| log | 0.7290 | 1.42x | atan2pi | 1.0000 | 1.03x |
+| log2 | 0.6888 | 1.21x | sinh | 0.6446 | 2.59x |
+| log10 | 0.9091 | 1.49x | cosh | 0.5645 | 1.77x |
+| log1p | 0.5890 | 1.75x | tanh | 0.5230 | 2.41x |
+| log2p1 | 1.0000 | 1.38x | asinh | 0.9076 | 1.23x |
+| pow | 0.5053 | 2.40x | acosh | 0.9352 | 1.43x |
+| sin | 0.7852 | 2.03x | atanh | 0.9885 | 1.99x |
+| cos | 0.7846 | 1.93x | hypot | 0.5000 | 1.94x |
+| tan | 0.7376 | 1.79x | erf | 1.0000 | 1.06x |
+| sincos | 0.8345 | 2.36x | erfc | 0.9272 | 0.77x |
+| sinpi | 1.0000 | 2.70x | tgamma | 1.0000 | 2.99x |
+| cospi | 0.8067 | 2.52x | lgamma | 0.8505 | 1.22x |
+| tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.20x |
+| sincospi | 1.0000 | 3.82x |  |  |  |
 
-The 41 `v<name>f` entries, measured over the same 100 057 records:
+The binary32 entries:
 
-| function | max ulp | | function | max ulp |
-|---|---|---|---|---|
-| acoshf | 0.4999 | | every other binary32 entry | 0.5000 |
+| function | max ulp | speedup | | function | max ulp | speedup |
+|---|---|---|---|---|---|---|
+| sqrtf | 0.5000 | 7.03x | asinf | 0.8136 | 3.33x |
+| rsqrtf | 0.5000 | 2.15x | acosf | 0.8893 | 4.21x |
+| cbrtf | 0.5000 | 1.46x | atanf | 0.8238 | 4.52x |
+| expf | 0.5257 | 6.26x | atan2f | 0.5000 | 1.47x |
+| exp2f | 0.5000 | 2.17x | asinpif | 0.8055 | 3.46x |
+| exp10f | 0.5000 | 2.18x | acospif | 0.5000 | 1.49x |
+| expm1f | 0.6321 | 4.82x | atanpif | 0.8251 | 5.08x |
+| logf | 0.5106 | 2.89x | atan2pif | 0.5000 | 1.75x |
+| log2f | 0.5340 | 2.83x | sinhf | 0.6741 | 5.83x |
+| log10f | 0.5279 | 5.43x | coshf | 0.5365 | 6.34x |
+| log1pf | 0.5796 | 3.40x | tanhf | 0.6855 | 3.21x |
+| log2p1f | 0.5523 | 2.28x | asinhf | 0.5238 | 2.85x |
+| powf | 0.5000 | 1.57x | acoshf | 0.5055 | 3.80x |
+| sinf | 0.5812 | 2.61x | atanhf | 0.5362 | 4.40x |
+| cosf | 0.5812 | 2.82x | hypotf | 0.5000 | 4.09x |
+| tanf | 0.6537 | 3.73x | erff | 0.5005 | 1.52x |
+| sincosf | 0.5916 | 4.67x | erfcf | 0.5312 | 1.67x |
+| sinpif | 0.5802 | 3.05x | tgammaf | 0.5002 | 6.74x |
+| cospif | 0.5627 | 2.44x | lgammaf | 0.5011 | 4.78x |
+| tanpif | 0.6965 | 3.72x | lgamma_rf | 0.5011 | 3.96x |
+| sincospif | 0.6040 | 4.58x |  |  |  |
 
-Every binary32 entry is within 0.5 ulp — half the contract — and no lane
-in any of them exceeds 0.5000. That is the expected consequence of
-evaluating in binary64: the binary64 kernel's own error is at most a few
-binary64 ulps, which is under 2^-29 of a binary32 ulp, so the total is
-0.5 ulp + 2^-29 and the harness reports 0.5000. Unlike the binary64 table
-above there are no entries that round twice onto a coarser grid, so no
-binary32 function reaches 1 ulp.
+Starred entries reach exactly 1.0 ulp, which the contract admits: they
+round twice, once at 53-bit precision in a scaled domain and then onto
+the coarser subnormal grid (`log2p1`, `sinpi`/`tanpi`/`sincospi`,
+`atanpi`/`atan2pi`, `asinpi`, `atan2`, and `hypot` on subnormal-result
+lanes), or they are `exp` of a very large `lgamma` (`tgamma`).
+
+### Where the speed comes from
+
+* The binary32 entries are no longer thin widen/narrow wrappers: each has
+  a native binary32 kernel (fdlibm float coefficients carried as (hi, lo)
+  double-float pairs, or a native f32 fast path) with a per-lane fallback
+  to the wide path for lanes outside the fast range, so accuracy and flag
+  semantics are inherited while the common case runs at f32 cost.
+* The binary64 kernels that used to carry double-double arithmetic
+  everywhere now run plain-double fdlibm/SLEEF-style algorithms with a
+  double-double tail only where the framework shows it is needed
+  (`erf`/`erfc`/`lgamma`/`tgamma`/`hypot`, the hyperbolic and inverse
+  hyperbolic families), and the gamma kernels shrank from 25 KB of
+  straight-line code to a few hundred instructions.
+* The rare-lane scalar fixup epilogue is out of line: its 4.8 KB of stack
+  buffers used to be charged to every strip of every kernel, which cost
+  30-45% of hot-loop throughput on this core (that single change took
+  `log2p1` from 0.99x to 1.38x).
+* `log2p1` is built as `log2(RN(1+x)) + c/(u ln2)` on the log2 core's dd
+  pair, so the 1/ln2 scaling costs no extra rounding; its hot path is a
+  leaf with the fixup behind a `vfirst` branch.
 
 ## VFABI aliases
 
@@ -216,11 +251,28 @@ so the split is exact and the results are unchanged.
   deliberately does not touch the `signgam` global. It is the one entry
   the VFABI mangling cannot express (a second vector in, an `int` vector
   out), so `vlgamma_r` has no `_ZGV` alias.
-* The binary32 kernels are wrappers around the binary64 ones rather than
-  hand-written binary32 kernels; rewriting the hot ones (exp, log, sin,
-  cos, pow) natively would halve their register pressure. The kernels'
-  *interface* is already element-generic (`include/f32/`), so such a
-  rewrite is local.
+* **Most binary32 entries are native now, but not all**: exp, log, trig,
+  invtrig, hyperbolic, erf and gamma have native binary32 kernels with a
+  per-lane fallback; `powf`, `cbrtf`, `rsqrtf` and `sqrtf` still wrap the
+  binary64 kernel (they are already 1.5-7x, so there was nothing to win).
+  The kernel *interface* is element-generic (`include/f32/`), so
+  converting the rest is local.
+* **The `erfc` kernel's 1.25 <= |x| tail is latency-bound** on this core:
+  its double-double chain (exp pair, dd multiply, dd divide) is one serial
+  dependency chain per strip, so it costs ~1.9x the scalar `erfc`
+  (0.77x) even though the same math is 8 lanes wide. Breaking that chain
+  (or a table-driven tail factor) is the remaining performance work.
+  `erf`, at 1.06x, has the same shape but a shorter chain.
+* **The gamma fast path is 1.27-1.54 ulp on its own band.** `lgamma`,
+  `lgamma_r` and `tgamma` dispatch per strip: a strip whose lanes all lie
+  in [0.5, 8) runs a compact plain-double/dd kernel (~10x faster than the
+  original), anything else runs the full double-double kernel. The FULL
+  MPFR tier (mixed arguments) measures <= 1 ulp, but `scripts/domain-check.sh`
+  -- which rewrites the blobs to keep only the fast-path band -- shows the
+  fast path alone reaches 1.27 ulp (tgamma), 1.41 (lgamma) and 1.54
+  (lgamma_r) on 0.1-0.3% of that band. Making the term combination
+  double-double (and `tgamma`'s argument product exact) is the fix; it
+  costs ~60 instructions and would take lgamma from 1.22x to about 1.1x.
 * There is **no installed binary32 counterpart of `<vecmath_rvv.h>`**: the
   binary32 kernel layer lives in `libm/vecmath/include/f32/` and is not
   installed, because an `f32mK` group widens into `2K` binary64 register
@@ -255,6 +307,15 @@ or `configure.ac`, re-run `autoreconf -f` in `newlib/` first.
 
 The test framework is plain make, outside the automake build. It covers
 both precisions; each function has a binary64 and a binary32 blob.
+`scripts/build.sh TAG runner bench` builds a tagged pair of binaries
+(parallel, per-tag object dirs so concurrent builds do not collide),
+`scripts/acc.sh TAG --func NAME --tier full` runs the accuracy gate,
+`scripts/bench-board.sh` runs the throughput benchmark on a real RVV
+board (board-side lock, pinned core, best-of runs), and
+`scripts/check-all.sh TAG` joins the two into a PASS/FAIL table.
+`scripts/filter-blob.py` + `scripts/domain-check.sh` re-run the accuracy
+framework on blobs filtered to a homogeneous domain, which is how
+fast-path-only accuracy is verified.
 
 ```
 cd newlib/libm/vecmath/test

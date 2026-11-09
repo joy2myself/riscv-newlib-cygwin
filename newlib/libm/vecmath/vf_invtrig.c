@@ -11,14 +11,14 @@
 #include <riscv_vector.h>
 #include <math.h>
 
-#define VM_LMUL 4
+#define VM_LMUL 8
 #include <vecmath_rvvcompat.h>
 #include <vecmath_dd.h>
 #include "vecmath_local.h"
 #include <k_trig.inc>	/* VM_INVPI_HI/LO, used by k_invtrig.inc */
 #include <k_invtrig.inc>
 
-#define VM32_LMUL 2
+#define VM32_LMUL 4
 #include <f32/compat.h>
 #include <f32/wrap.h>
 #include <f32/k_invtrig.inc>

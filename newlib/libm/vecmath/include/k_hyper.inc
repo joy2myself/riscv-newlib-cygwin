@@ -2,126 +2,183 @@
 
    LMUL-generic template: include after vecmath_rvvcompat.h,
    vecmath_dd.h and vecmath_local.h (k_fixup.inc) with VM_LMUL defined.
-   Also needs k_expm1.inc and k_exp.inc instantiated at the same LMUL.
+   Also needs k_exp.inc instantiated at the same LMUL (VM_EXP_DD and
+   VM_KFN(exp)).
 
-   Ports fdlibm math/e_sinh.c, math/e_cosh.c and math/s_tanh.c.  All three
-   are even or odd, so everything runs on |x| and the sign is re-applied at
-   the end.  Range tests become masks, and the exp/expm1 arguments on lanes
-   that fdlibm shortcuts (|x| < 2^-28 / 2^-55, +-Inf, NaN) are replaced by
-   a benign 1.0, so a lane cannot raise a gated flag belonging to a branch
-   it is not in.
+   Structure: a fast path valid on |x| < 22 plus a per-strip fallback for
+   the rare lanes outside it (|x| >= 22, the overflow boundary, +-Inf and
+   NaN).  The fallback is computed only when a strip contains such a lane
+   (one vfirst), and the result is merged per lane, so the value of a lane
+   never depends on the other lanes of its strip: stripmine/VL sweeps stay
+   bitwise identical.
 
-   fdlibm's single-double recipe reaches 1.45 ulp here, so the formula is
-   carried as a dd pair and collapsed once at the end: the |x| < 22 region
-   feeds expm1's own error into the result, and the top region's
-   exp(0.5|x|)^2 doubles whatever exp rounds off.  The regions between them
-   scale exp by +-0.5, an exact scale, so a single-double exp suffices.  */
+   Fast path (always accurate, ~0.5-0.7 ulp):
+     e = exp(|x|) as a double-double (VM_EXP_DD, ~2^-60 relative),
+     1/e by one division plus the residual,
+     sinh = +-0.5*(e - 1/e), cosh = 0.5*(e + 1/e), tanh = (e-1/e)/(e+1/e).
+   The dd forms are needed because the plain-double versions amplify the
+   0.5 ulp of exp() into 1.5-3 ulp (the dd pair costs only ~15 vector
+   instructions over the plain exp).  |x| < 2^-28 (sinh) / < 2^-55 (tanh)
+   return x, and the |x| below 0.125 (sinh) / 0.05 (tanh) small range uses
+   the Taylor polynomial, because e-1/e loses the leading digits there.
 
-/* |x| >= 22: sinh/cosh use exp(|x|) up to log(DBL_MAX) and the two-step
-   exp(0.5|x|)^2 above it (fdlibm's overflow-avoiding form).  */
-#define VM_HYP_22	0x40360000u
-#define VM_HYP_LOGE	0x40862e42u	/* log(DBL_MAX) */
-#define VM_HYP_OFL	0x408633ceu	/* 710.475860073944 */
-#define VM_HYP_OFL_LOW	0x8fb9f87du
+   The |x| >= 22 branch matrix keeps fdlibm's 10.5 ulp-free recipes:
+     22 <= |x| < log(DBL_MAX):      0.5*exp(|x|)
+     log(DBL_MAX) <= |x| < ofl:     0.5*exp(|x|) via exp(x-1024*ln2)*2^1023
+     |x| >= ofl (710.4758600739439): overflow, +-Inf + OVERFLOW
+     +-Inf / NaN:                    exact classes, sNaN invalid
+   tanh is +-1 (or NaN) there.  */
 
-/* Collapse the dd pair at the end of each kernel.  A plain add is wrong
-   for the lanes that carry an exact signed zero -- tanh(+-0) = +-0 and
-   sinh(+-0) = +-0 -- because -0 + +0 is +0.  Wherever lo is exactly zero
-   the pair's value *is* hi, so take hi back on those lanes.  vmfeq is a
-   quiet compare, so a lane holding NaN does not raise INVALID here.  */
-#define VM_HYP_COLLAPSE(r, yh, yl, vl) do {				\
-  (r) = VM_VFADD_VV ((yh), (yl), (vl));					\
-  (r) = VM_VFMERGE_VVM ((r), (yh), VM_VMFEQ_VF ((yl), 0.0, (vl)), (vl)); \
+/* Region edges, as binary64 bit patterns (all inputs are |x| >= 0, and
+   positive-double bit patterns order like the values).  */
+#define VM_HYP_22	0x4036000000000000ULL	/* 22.0 */
+#define VM_HYP_2M28	0x3e30000000000000ULL	/* 2^-28 */
+#define VM_HYP_2M300	0x2d30000000000000ULL	/* 2^-300 */
+#define VM_HYP_SINH_SM	0x3fc0000000000000ULL	/* 0.125 */
+#define VM_HYP_TANH_SM	0x3fa999999999999aULL	/* 0.05 */
+#define VM_HYP_LOGE	0x40862e42fefa39efULL	/* log(DBL_MAX) */
+#define VM_HYP_OFL	0x408633ce8fb9f87eULL	/* 22+overflow threshold */
+#define VM_HYP_INF	0x7ff0000000000000ULL
+/* 1024*ln2 split: c1 = 1024*ln2 rounded to double, c2 = the residual.
+   c1 is exact (power-of-two scale of the double ln2).  */
+#define VM_HYP_LN2K1	709.78271289338397310
+#define VM_HYP_LN2K2	2.3747039373786107e-14
+#define VM_HYP_2P1023	0x1p1023		/* 2^1023 */
+
+/* (oh, ol) = 1/(eh + el), ~2^-105 relative; |eh| >= 1 so no division by
+   zero or overflow.  */
+#define VM_HYP_INVDD(oh, ol, eh, el, vl) do {				\
+  vm_f_t vhi_r = VM_VFRDIV_VF ((eh), 1.0, (vl));			\
+  vm_f_t vhi_e = VM_VFNMSAC_VV (VM_VFMV_V_F (1.0, (vl)), vhi_r, (eh), (vl)); \
+  (oh) = vhi_r;								\
+  (ol) = VM_VFMUL_VV (							\
+    VM_VFNMSAC_VV (vhi_e, vhi_r, (el), (vl)), vhi_r, (vl));		\
 } while (0)
+
+/* (qh, ql) = (nh + nl)/(dh + dl), ~2^-105 relative, one division
+   (reciprocal of dh refined by the exact residual; dh > 0, no div by
+   zero).  */
+#define VM_HYP_DIVDD(qh, ql, nh, nl, dh, dl, vl) do {			\
+  vm_f_t vhq_r = VM_VFRDIV_VF ((dh), 1.0, (vl));			\
+  vm_f_t vhq_e = VM_VFNMSAC_VV (VM_VFMV_V_F (1.0, (vl)), vhq_r, (dh), (vl)); \
+  vhq_r = VM_VFMACC_VV (vhq_r, vhq_r, vhq_e, (vl));			\
+  (qh) = VM_VFMUL_VV ((nh), vhq_r, (vl));				\
+  {									\
+    vm_f_t vhq_s = VM_VFNMSAC_VV ((nh), (qh), (dh), (vl));		\
+    vhq_s = VM_VFADD_VV (vhq_s, (nl), (vl));				\
+    vhq_s = VM_VFNMSAC_VV (vhq_s, (qh), (dl), (vl));			\
+    (ql) = VM_VFMUL_VV (vhq_s, vhq_r, (vl));				\
+  }									\
+} while (0)
+
+/* ---- sinh ------------------------------------------------------- */
+
+static inline vm_f_t
+VM_KFN (sinh_special) (vm_f_t x, vm_f_t ax, vm_f_t h, vm_f_t sg, vm_f_t z,
+		       vm_b_t m22, size_t vl)
+{
+  vm_u64_t ab = VM_BITS (ax);
+  vm_b_t mov = VM_VMSGEU_VX (ab, VM_HYP_OFL, vl);
+  vm_b_t mnf = VM_VMSGEU_VX (ab, VM_HYP_INF, vl);
+  vm_b_t mband = VM_VMAND_MM (VM_VMNOT_M (mov, vl),
+			      VM_VMSGTU_VX (ab, VM_HYP_LOGE, vl), vl);
+  /* 22 <= |x| < log(DBL_MAX): 0.5*exp(|x|).  */
+  vm_f_t axa = VM_VFMERGE_VFM (ax, 1.0,
+			       VM_VMOR_MM (mband, VM_VMOR_MM (mov, mnf, vl),
+					   vl), vl);
+  /* Region A: 0.5*exp(|x|) (the h scale, sign included).  */
+  vm_f_t zp = VM_VFMUL_VV (h, VM_KFN (exp) (axa, vl, exp), vl);
+  /* log(DBL_MAX) <= |x| < overflow: 0.5*exp(x) evaluated as
+     exp(x - 1024*ln2) * 2^1023 so that the final scale is exact.  */
+  if (VM_VFIRST_M (mband, vl) >= 0)
+    {
+      vm_f_t b = VM_VFSUB_VF (ax, VM_HYP_LN2K1, vl);
+      b = VM_VFSUB_VF (b, VM_HYP_LN2K2, vl);
+      b = VM_VFMERGE_VFM (b, 0.0, VM_VMNOT_M (mband, vl), vl);
+      vm_f_t zb = VM_VFMUL_VF (VM_KFN (exp) (b, vl, exp), VM_HYP_2P1023, vl);
+      zp = VM_VFMERGE_VVM (zp, VM_VFMUL_VV (sg, zb, vl), mband, vl);
+    }
+  /* overflow: x*shuge raises OVERFLOW on those lanes only.  */
+  if (VM_VFIRST_M (mov, vl) >= 0)
+    zp = VM_VFMERGE_VVM (
+      zp, VM_VFMUL_VV_M (mov, x, VM_VFMV_V_F (1.0e307, vl), vl), mov, vl);
+  /* +-Inf -> +-Inf, NaN -> NaN (invalid only for sNaN).  */
+  zp = VM_VFMERGE_VVM (zp, VM_VFADD_VV_M (mnf, x, x, vl), mnf, vl);
+  return VM_VFMERGE_VVM (z, zp, m22, vl);
+}
 
 static inline vm_f_t
 VM_KFN (sinh) (vm_f_t x, size_t vl)
 {
   vm_i64_t hx = VM_VSRA_VX (VM_REINT_U_I (VM_BITS (x)), 32, vl);
   vm_u64_t ix = VM_VAND_VX (VM_REINT_I_U (hx), 0x7fffffff, vl);
-  vm_u64_t lx = VM_VAND_VX (VM_BITS (x), 0xffffffffULL, vl);
-  vm_b_t mneg = VM_VMSLT_VX (hx, 0, vl);
+  vm_b_t m22 = VM_VMSGEU_VX (ix, 0x40360000u, vl);
   vm_b_t mtiny = VM_VMSLTU_VX (ix, 0x3e300000u, vl);	/* |x| < 2^-28 */
-  vm_b_t mnonfin = VM_VMSGEU_VX (ix, 0x7ff00000u, vl);
-  vm_b_t mbig = VM_VMSGEU_VX (ix, VM_HYP_22, vl);	/* |x| >= 22 */
-  vm_b_t mtop = VM_VMSGEU_VX (ix, VM_HYP_LOGE, vl);
-  vm_b_t muted = VM_VMOR_MM (
-    VM_VMSLTU_VX (ix, VM_HYP_OFL, vl),
-    VM_VMAND_MM (VM_VMSEQ_VX (ix, VM_HYP_OFL, vl),
-		 VM_VMSLEU_VX (lx, VM_HYP_OFL_LOW, vl), vl), vl);
-  /* fdlibm overflows for |x| > 710.4758, above the top region's start:
-     these lanes must not fall through into the w^2 branch, where inf*inf
-     inside a dd two_prod is NaN + INVALID.  */
-  vm_b_t mof = VM_VMAND_MM (mtop, VM_VMNOT_M (muted, vl), vl);
+  vm_b_t msmall = VM_VMSLTU_VX (ix, 0x3fc00000u, vl);	/* |x| < 0.125 */
+  vm_b_t mneg = VM_VMSLT_VX (hx, 0, vl);
+  vm_f_t ax = VM_VFABS_V (x, vl);
+  vm_f_t axs = VM_VFMERGE_VFM (ax, 1.0, m22, vl);
   vm_f_t h = VM_VFMERGE_VFM (VM_VFMV_V_F (0.5, vl), -0.5, mneg, vl);
-  /* lanes that take a shortcut must not feed the transcendentals */
-  vm_b_t mskip = VM_VMOR_MM (mtiny, mnonfin, vl);
-  vm_f_t ag = VM_VFMERGE_VFM (VM_VFABS_V (x, vl), 1.0, mskip, vl);
-  vm_f_t yh, yl;
+  vm_f_t sg = VM_VFMERGE_VFM (VM_VFMV_V_F (1.0, vl), -1.0, mneg, vl);
+  vm_f_t z;
   {
-    /* |x| < 22: t = expm1(|x|), sinh = h*(t + t/(t+1)), in dd.  fdlibm
-       splits this into 2t - t*t/(t+1) below 1 and t + t/(t+1) above; the
-       two are the same value, and dd needs just the one form.  */
-    vm_f_t th, tl, dwh, dwl, qh, ql;
-    /* expm1 is only read back for |x| < 22.  Above that it is masked to
-       a benign 1.0 so its own overflow region (|x| > 709.78) cannot
-       raise OVERFLOW on a lane whose answer comes from elsewhere.  */
-    VM_EXPM1_DD (th, tl, VM_VFMERGE_VFM (ag, 1.0, mbig, vl), vl);
-    VM_DD_ADD_D (dwh, dwl, th, tl, 1.0, vl);
-    VM_DD_DIV (qh, ql, th, tl, dwh, dwl, vl);
-    VM_DD_ADD (yh, yl, th, tl, qh, ql, vl);
-    /* h is +-0.5: an exact scale, so it cannot disturb the pair.  */
-    yh = VM_VFMUL_VV (h, yh, vl);
-    yl = VM_VFMUL_VV (h, yl, vl);
+    /* 0.5*(e - 1/e), e = exp(|x|) to ~2^-60 relative.  */
+    vm_f_t eh, el, ih, il;
+    VM_EXP_DD (eh, el, axs, vl, exp);
+    VM_HYP_INVDD (ih, il, eh, el, vl);
+    vm_f_t s = VM_VFSUB_VV (eh, ih, vl);
+    vm_f_t re = VM_VFSUB_VV (VM_VFSUB_VV (eh, s, vl), ih, vl);
+    vm_f_t dl = VM_VFADD_VV (VM_VFSUB_VV (re, il, vl), el, vl);
+    z = VM_VFMUL_VV (h, VM_VFADD_VV (s, dl, vl), vl);
   }
   {
-    /* 22 <= |x| < log(DBL_MAX): h*exp(|x|).  The exp argument is masked
-       to these lanes only: above log(DBL_MAX) it would overflow and
-       raise a spurious flag on lanes whose result comes from the square
-       below (cosh/sinh do not overflow until 710.4758).  */
-    vm_b_t mb = VM_VMAND_MM (mbig, VM_VMNOT_M (mtop, vl), vl);
-    vm_f_t ae = VM_VFMERGE_VFM (ag, 1.0, VM_VMNOT_M (mb, vl), vl);
-    vm_f_t e = VM_KFN (exp) (ae, vl, exp);
-    yh = VM_VFMERGE_VVM (yh, VM_VFMUL_VV (h, e, vl), mb, vl);
-    yl = VM_VFMERGE_VFM (yl, 0.0, mb, vl);
+    /* |x| < 0.125: x + x*t*P(t), t = x^2.  Only the guard lanes and
+       |x| < 2^-300 (whose x^2 would underflow) need a benign input.  */
+    vm_b_t mden = VM_VMSLTU_VX (ix, 0x2d300000u, vl);
+    vm_f_t axp = VM_VFMERGE_VFM (axs, 1.0,
+				 VM_VMOR_MM (mden, m22, vl), vl);
+    vm_f_t t2 = VM_VFMUL_VV (axp, axp, vl);
+    vm_f_t p = VM_VFADD_VF (
+      VM_VFMUL_VF (t2, 1.0 / 362880.0, vl), 1.0 / 5040.0, vl);
+    p = VM_VFADD_VF (VM_VFMUL_VV (p, t2, vl), 1.0 / 120.0, vl);
+    p = VM_VFADD_VF (VM_VFMUL_VV (p, t2, vl), 1.0 / 6.0, vl);
+    vm_f_t rp = VM_VFMACC_VV (axp, VM_VFMUL_VV (t2, p, vl), axp, vl);
+    z = VM_VFMERGE_VVM (z, VM_VFMUL_VV (sg, rp, vl), msmall, vl);
   }
-  {
-    /* top range: h * exp(0.5|x|)^2, which also covers the overflow lanes
-       (the square goes to +Inf and raises OVERFLOW there).  exp must be dd
-       here: its 0.5 ulp is doubled by the square.  w itself is far from
-       overflow (0.5*710.5 = 355.2), so the overflow lives entirely in the
-       square; the mof lanes are sanitized out of it because inf*inf would
-       inject a NaN into the dd two_prod and raise INVALID.  Their OVERFLOW
-       comes from the masked product further down.  */
-    vm_f_t wh, wl, uh, ul, vh, v2l;
-    VM_EXP_DD (wh, wl, VM_VFMUL_VF (ag, 0.5, vl), vl, exp);
-    wh = VM_VFMERGE_VFM (wh, 1.0, mof, vl);
-    wl = VM_VFMERGE_VFM (wl, 0.0, mof, vl);
-    /* (0.5*w)*w, never w*w first: the square overflows marginally
-       earlier than the true product does.  */
-    VM_DD_MUL_D (uh, ul, wh, wl, 0.5, vl);
-    VM_DD_MUL (vh, v2l, uh, ul, wh, wl, vl);
+  z = VM_VFMERGE_VVM (z, x, mtiny, vl);
+  if (VM_VFIRST_M (m22, vl) >= 0)
+    z = VM_KFN (sinh_special) (x, ax, h, sg, z, m22, vl);
+  return z;
+}
+
+/* ---- cosh ------------------------------------------------------- */
+
+static inline vm_f_t
+VM_KFN (cosh_special) (vm_f_t ax, vm_f_t z, vm_b_t m22, size_t vl)
+{
+  vm_u64_t ab = VM_BITS (ax);
+  vm_b_t mov = VM_VMSGEU_VX (ab, VM_HYP_OFL, vl);
+  vm_b_t mnf = VM_VMSGEU_VX (ab, VM_HYP_INF, vl);
+  vm_b_t mband = VM_VMAND_MM (VM_VMNOT_M (mov, vl),
+			      VM_VMSGTU_VX (ab, VM_HYP_LOGE, vl), vl);
+  vm_f_t axa = VM_VFMERGE_VFM (ax, 1.0,
+			       VM_VMOR_MM (mband, VM_VMOR_MM (mov, mnf, vl),
+					   vl), vl);
+  vm_f_t zp = VM_VFMUL_VF (VM_KFN (exp) (axa, vl, exp), 0.5, vl);
+  if (VM_VFIRST_M (mband, vl) >= 0)
     {
-      vm_f_t sg = VM_VFMERGE_VFM (VM_VFMV_V_F (1.0, vl), -1.0, mneg, vl);
-      vm_b_t mt = VM_VMAND_MM (mtop, VM_VMNOT_M (mof, vl), vl);
-      yh = VM_VFMERGE_VVM (yh, VM_VFMUL_VV (sg, vh, vl), mt, vl);
-      yl = VM_VFMERGE_VVM (yl, VM_VFMUL_VV (sg, v2l, vl), mt, vl);
+      vm_f_t b = VM_VFSUB_VF (ax, VM_HYP_LN2K1, vl);
+      b = VM_VFSUB_VF (b, VM_HYP_LN2K2, vl);
+      b = VM_VFMERGE_VFM (b, 0.0, VM_VMNOT_M (mband, vl), vl);
+      zp = VM_VFMERGE_VVM (
+	zp, VM_VFMUL_VF (VM_KFN (exp) (b, vl, exp), VM_HYP_2P1023, vl),
+	mband, vl);
     }
-  }
-  /* overflow: x*shuge (masked -- the product overflows for plenty of
-     lanes that are not in this branch).  */
-  yh = VM_VFMERGE_VVM (yh, VM_VFMUL_VV_M (mof, x, VM_VFMV_V_F (1.0e307, vl),
-					  vl), mof, vl);
-  yl = VM_VFMERGE_VFM (yl, 0.0, mof, vl);
-  yh = VM_VFMERGE_VVM (yh, x, mtiny, vl);		/* sinh(tiny) = tiny */
-  yl = VM_VFMERGE_VFM (yl, 0.0, mtiny, vl);
-  yh = VM_VFMERGE_VVM (yh, VM_VFADD_VV_M (mnonfin, x, x, vl), mnonfin, vl);
-  yl = VM_VFMERGE_VFM (yl, 0.0, mnonfin, vl);
-  {
-    vm_f_t vr;
-    VM_HYP_COLLAPSE (vr, yh, yl, vl);
-    return vr;
-  }
+  if (VM_VFIRST_M (mov, vl) >= 0)
+    zp = VM_VFMERGE_VVM (
+      zp, VM_VFMUL_VV_M (mov, ax, VM_VFMV_V_F (1.0e307, vl), vl), mov, vl);
+  zp = VM_VFMERGE_VVM (zp, VM_VFADD_VV_M (mnf, ax, ax, vl), mnf, vl);
+  return VM_VFMERGE_VVM (z, zp, m22, vl);
 }
 
 static inline vm_f_t
@@ -129,90 +186,27 @@ VM_KFN (cosh) (vm_f_t x, size_t vl, double (*fixup) (double))
 {
   vm_u64_t ix = VM_VAND_VX (
     VM_VSRL_VX (VM_BITS (x), 32, vl), 0x7fffffffULL, vl);
-  vm_u64_t lx = VM_VAND_VX (VM_BITS (x), 0xffffffffULL, vl);
-  vm_b_t mtiny = VM_VMSLTU_VX (ix, 0x3c800000u, vl);	/* |x| < 2^-55 */
-  vm_b_t mhalf = VM_VMSLTU_VX (ix, 0x3fd62e43u, vl);	/* |x| < ln2/2 */
-  vm_b_t mnonfin = VM_VMSGEU_VX (ix, 0x7ff00000u, vl);
-  vm_b_t mbig = VM_VMSGEU_VX (ix, VM_HYP_22, vl);
-  vm_b_t mtop = VM_VMSGEU_VX (ix, VM_HYP_LOGE, vl);
-  vm_b_t muted = VM_VMOR_MM (
-    VM_VMSLTU_VX (ix, VM_HYP_OFL, vl),
-    VM_VMAND_MM (VM_VMSEQ_VX (ix, VM_HYP_OFL, vl),
-		 VM_VMSLEU_VX (lx, VM_HYP_OFL_LOW, vl), vl), vl);
-  /* fdlibm overflows for |x| > 710.4758, above the top region's start:
-     these lanes must not fall through into the w^2 branch, where inf*inf
-     inside a dd two_prod is NaN + INVALID.  */
-  vm_b_t mof = VM_VMAND_MM (mtop, VM_VMNOT_M (muted, vl), vl);
-  vm_b_t mskip = VM_VMOR_MM (mtiny, mnonfin, vl);
+  vm_b_t m22 = VM_VMSGEU_VX (ix, 0x40360000u, vl);
   vm_f_t ax = VM_VFABS_V (x, vl);
-  vm_f_t ag = VM_VFMERGE_VFM (ax, 1.0, mskip, vl);
-  vm_f_t yh, yl;
+  vm_f_t axs = VM_VFMERGE_VFM (ax, 1.0, m22, vl);
+  vm_f_t z;
   {
-    /* |x| < ln2/2: 1 + t^2/(2*(1+t)) with t = expm1(|x|), in dd.  */
-    vm_f_t th, tl, dwh, dwl, t2h, t2l, d2h, d2l, qh, ql;
-    /* Only |x| < ln2/2 reads expm1 back; mask the rest to a benign 1.0
-       (see sinh) so their expm1 flags stay out of the result.  */
-    VM_EXPM1_DD (th, tl, VM_VFMERGE_VFM (ag, 1.0, VM_VMNOT_M (mhalf, vl), vl),
-		 vl);
-    VM_DD_ADD_D (dwh, dwl, th, tl, 1.0, vl);
-    VM_DD_MUL (t2h, t2l, th, tl, th, tl, vl);
-    VM_DD_MUL_D (d2h, d2l, dwh, dwl, 2.0, vl);
-    VM_DD_DIV (qh, ql, t2h, t2l, d2h, d2l, vl);
-    VM_DD_ADD_D (yh, yl, qh, ql, 1.0, vl);
-    yh = VM_VFMERGE_VFM (yh, 1.0, mtiny, vl);	/* cosh(tiny) = 1 */
-    yl = VM_VFMERGE_VFM (yl, 0.0, mtiny, vl);
+    /* 0.5*(e + 1/e), e = exp(|x|) to ~2^-60 relative; no cancellation.  */
+    vm_f_t eh, el, ih, il;
+    VM_EXP_DD (eh, el, axs, vl, exp);
+    VM_HYP_INVDD (ih, il, eh, el, vl);
+    vm_f_t s = VM_VFADD_VV (eh, ih, vl);
+    vm_f_t re = VM_VFADD_VV (VM_VFSUB_VV (eh, s, vl), ih, vl);
+    vm_f_t dl = VM_VFADD_VV (VM_VFADD_VV (re, el, vl), il, vl);
+    z = VM_VFMUL_VF (VM_VFADD_VV (s, dl, vl), 0.5, vl);
   }
-  {
-    /* ln2/2 <= |x| < 22: (exp(|x|) + 1/exp(|x|))/2, in dd: the 1/e term
-       spends half an ulp of its own on top of what the /2 damping leaves
-       of the exp error.  */
-    vm_b_t mmid = VM_VMAND_MM (VM_VMNOT_M (mhalf, vl),
-			       VM_VMNOT_M (mbig, vl), vl);
-    vm_f_t vhalf = VM_VFMV_V_F (0.5, vl);
-    vm_f_t vshalf = VM_VFMV_V_F (0.0, vl);
-    vm_f_t ae = VM_VFMERGE_VFM (ag, 1.0, VM_VMNOT_M (mmid, vl), vl);
-    vm_f_t eh, el, qh, ql, ph, pl, rh, rl;
-    VM_EXP_DD (eh, el, ae, vl, exp);
-    VM_DD_DIV (qh, ql, vhalf, vshalf, eh, el, vl);	/* (1/2)/e */
-    VM_DD_MUL_D (ph, pl, eh, el, 0.5, vl);		/* e/2 */
-    VM_DD_ADD (rh, rl, ph, pl, qh, ql, vl);
-    yh = VM_VFMERGE_VVM (yh, rh, mmid, vl);
-    yl = VM_VFMERGE_VVM (yl, rl, mmid, vl);
-  }
-  {
-    /* 22 <= |x| < log(DBL_MAX): exp(|x|)/2, an exact +-0.5 scale.  */
-    vm_b_t mb = VM_VMAND_MM (mbig, VM_VMNOT_M (mtop, vl), vl);
-    vm_f_t ae = VM_VFMERGE_VFM (ag, 1.0, VM_VMNOT_M (mb, vl), vl);
-    yh = VM_VFMERGE_VVM (yh, VM_VFMUL_VF (VM_KFN (exp) (ae, vl, exp), 0.5, vl),
-			 mb, vl);
-    yl = VM_VFMERGE_VFM (yl, 0.0, mb, vl);
-  }
-  {
-    /* top range: exp(0.5|x|)^2/2, dd for the same reason as sinh.  */
-    vm_f_t wh, wl, uh, ul, vh, v2l;
-    VM_EXP_DD (wh, wl, VM_VFMUL_VF (ag, 0.5, vl), vl, exp);
-    wh = VM_VFMERGE_VFM (wh, 1.0, mof, vl);
-    wl = VM_VFMERGE_VFM (wl, 0.0, mof, vl);
-    VM_DD_MUL_D (uh, ul, wh, wl, 0.5, vl);
-    VM_DD_MUL (vh, v2l, uh, ul, wh, wl, vl);
-    {
-      vm_b_t mt = VM_VMAND_MM (mtop, VM_VMNOT_M (mof, vl), vl);
-      yh = VM_VFMERGE_VVM (yh, vh, mt, vl);
-      yl = VM_VFMERGE_VVM (yl, v2l, mt, vl);
-    }
-  }
-  /* overflow lanes: fdlibm's __math_oflow(0) -> +Inf with overflow (the
-     scalar fixup reproduces the exact flag behaviour).  */
-  yh = VM_KFN (scalar_fixup) (x, yh, mof, vl, fixup);
-  yl = VM_VFMERGE_VFM (yl, 0.0, mof, vl);
-  yh = VM_VFMERGE_VVM (yh, VM_VFMUL_VV_M (mnonfin, x, x, vl), mnonfin, vl);
-  yl = VM_VFMERGE_VFM (yl, 0.0, mnonfin, vl);
-  {
-    vm_f_t vr;
-    VM_HYP_COLLAPSE (vr, yh, yl, vl);
-    return vr;
-  }
+  (void) fixup;
+  if (VM_VFIRST_M (m22, vl) >= 0)
+    z = VM_KFN (cosh_special) (ax, z, m22, vl);
+  return z;
 }
+
+/* ---- tanh ------------------------------------------------------- */
 
 static inline vm_f_t
 VM_KFN (tanh) (vm_f_t x, size_t vl)
@@ -220,71 +214,54 @@ VM_KFN (tanh) (vm_f_t x, size_t vl)
   vm_i64_t hx = VM_VSRA_VX (VM_REINT_U_I (VM_BITS (x)), 32, vl);
   vm_u64_t ix = VM_VAND_VX (VM_REINT_I_U (hx), 0x7fffffff, vl);
   vm_b_t mneg = VM_VMSLT_VX (hx, 0, vl);
-  vm_b_t msmall = VM_VMSLTU_VX (ix, 0x3c800000u, vl);	/* |x| < 2^-55 */
-  vm_b_t mnonfin = VM_VMSGEU_VX (ix, 0x7ff00000u, vl);
-  vm_b_t mbig = VM_VMSGEU_VX (ix, VM_HYP_22, vl);	/* |x| >= 22 */
-  vm_b_t mge1 = VM_VMSGEU_VX (ix, 0x3ff00000u, vl);	/* |x| >= 1 */
-  vm_b_t mskip = VM_VMOR_MM (msmall, mnonfin, vl);
-  vm_f_t ax = VM_VFMERGE_VFM (VM_VFABS_V (x, vl), 0.5, mskip, vl);
-  vm_f_t yh, yl;
+  vm_b_t m22 = VM_VMSGEU_VX (ix, 0x40360000u, vl);
+  vm_b_t mtiny = VM_VMSLTU_VX (ix, 0x3c800000u, vl);	/* |x| < 2^-55 */
+  vm_b_t msmall = VM_VMSLTU_VX (ix, 0x3fa99999u, vl);	/* |x| < 0.05 */
+  vm_f_t ax = VM_VFABS_V (x, vl);
+  vm_f_t axs = VM_VFMERGE_VFM (ax, 1.0, m22, vl);
+  vm_f_t z;
   {
-    /* |x| < 1: z = -t/(t+2) with t = expm1(-2|x|)
-       |x| >= 1: z = 1 - 2/(t+2) with t = expm1(2|x|)
-       The division residual is what fdlibm loses: z is read off a
-       correction term of size ~1 whose own 0.5 ulp, doubled and compared
-       against a result of ~1.5, is the whole 0.73 ulp.  dd carries the
-       quotient to ~2^-106, so only the final collapse rounds.  */
-    vm_f_t vone = VM_VFMV_V_F (1.0, vl);
-    vm_f_t vtwo = VM_VFMV_V_F (2.0, vl);
-    vm_f_t vzero = VM_VFMV_V_F (0.0, vl);
-    /* Each expm1 is masked to the lanes that read it back, at 0.5 (so
-       the -2x / 2x multiplier keeps it in expm1's benign range): |x| >= 1
-       would otherwise push 2|x| to infinity and put inf-inf through the
-       dd two_sum -> spurious INVALID, and |x| >= 22 asks for expm1(44+)
-       that nothing consumes.  */
-    vm_b_t mz2 = VM_VMAND_MM (mge1, VM_VMNOT_M (mbig, vl), vl);
-    vm_f_t a1 = VM_VFMERGE_VFM (ax, 0.5, mge1, vl);
-    vm_f_t a2 = VM_VFMERGE_VFM (ax, 0.5, VM_VMNOT_M (mz2, vl), vl);
-    vm_f_t t1h, t1l, dh, dl;
-    VM_EXPM1_DD (t1h, t1l, VM_VFMUL_VF (a1, -2.0, vl), vl);
-    VM_DD_ADD_D (dh, dl, t1h, t1l, 2.0, vl);
-    VM_DD_DIV (yh, yl, t1h, t1l, dh, dl, vl);
-    yh = VM_VFNEG_V (yh, vl);
-    yl = VM_VFNEG_V (yl, vl);
+    /* tanh = (e - 1/e)/(e + 1/e), e = exp(|x|) to ~2^-60 relative.  */
+    vm_f_t eh, el, ih, il, qh, ql;
+    VM_EXP_DD (eh, el, axs, vl, exp);
+    VM_HYP_INVDD (ih, il, eh, el, vl);
+    vm_f_t sd = VM_VFSUB_VV (eh, ih, vl);
+    vm_f_t rd = VM_VFSUB_VV (VM_VFSUB_VV (eh, sd, vl), ih, vl);
+    vm_f_t dl = VM_VFADD_VV (VM_VFSUB_VV (rd, il, vl), el, vl);
+    vm_f_t ss = VM_VFADD_VV (eh, ih, vl);
+    vm_f_t rs = VM_VFADD_VV (VM_VFSUB_VV (eh, ss, vl), ih, vl);
+    vm_f_t sl = VM_VFADD_VV (VM_VFADD_VV (rs, el, vl), il, vl);
+    VM_HYP_DIVDD (qh, ql, sd, dl, ss, sl, vl);
+    z = VM_VFADD_VV (qh, ql, vl);
+  }
+  {
+    /* |x| < 0.05: x*P(x^2), tanh Taylor.  Guard lanes and |x| < 2^-300
+       (whose x^2 would underflow) get a benign input instead.  */
+    vm_b_t mden = VM_VMSLTU_VX (ix, 0x2d300000u, vl);
+    vm_f_t axp = VM_VFMERGE_VFM (axs, 1.0,
+				 VM_VMOR_MM (mden, m22, vl), vl);
+    vm_f_t t2 = VM_VFMUL_VV (axp, axp, vl);
+    vm_f_t p = VM_VFADD_VF (
+      VM_VFMUL_VF (t2, -1382.0 / 155925.0, vl), 62.0 / 2835.0, vl);
+    p = VM_VFADD_VF (VM_VFMUL_VV (p, t2, vl), -17.0 / 315.0, vl);
+    p = VM_VFADD_VF (VM_VFMUL_VV (p, t2, vl), 2.0 / 15.0, vl);
+    p = VM_VFADD_VF (VM_VFMUL_VV (p, t2, vl), -1.0 / 3.0, vl);
+    /* x + x*t*p, one fma: no 1+small rounding.  */
+    vm_f_t rp = VM_VFMACC_VV (axp, axp, VM_VFMUL_VV (t2, p, vl), vl);
+    z = VM_VFMERGE_VVM (z, rp, msmall, vl);
+  }
+  z = VM_VFMERGE_VVM (z, VM_VFNEG_V (z, vl), mneg, vl);
+  z = VM_VFMERGE_VVM (z, x, mtiny, vl);
+  if (VM_VFIRST_M (m22, vl) >= 0)
     {
-      vm_f_t t2h, t2l, dh2, dl2, qh, ql, rh, rl;
-      VM_EXPM1_DD (t2h, t2l, VM_VFMUL_VF (a2, 2.0, vl), vl);
-      VM_DD_ADD_D (dh2, dl2, t2h, t2l, 2.0, vl);
-      VM_DD_DIV (qh, ql, vtwo, vzero, dh2, dl2, vl);
-      VM_DD_SUB (rh, rl, vone, vzero, qh, ql, vl);	/* 1 - 2/(t+2) */
-      yh = VM_VFMERGE_VVM (yh, rh, mge1, vl);
-      yl = VM_VFMERGE_VVM (yl, rl, mge1, vl);
+      /* |x| >= 22 -> +-1 (exact); +-Inf -> +-1; NaN -> NaN.  */
+      vm_b_t mnf = VM_VMSGEU_VX (ix, 0x7ff00000u, vl);
+      vm_b_t minf = VM_VMSEQ_VX (VM_BITS (ax), VM_HYP_INF, vl);
+      vm_f_t sg = VM_VFMERGE_VFM (VM_VFMV_V_F (1.0, vl), -1.0, mneg, vl);
+      vm_f_t zs = VM_VFMERGE_VVM (sg, VM_VFADD_VV_M (mnf, x, x, vl), mnf,
+				  vl);
+      zs = VM_VFMERGE_VVM (zs, sg, minf, vl);
+      z = VM_VFMERGE_VVM (z, zs, m22, vl);
     }
-    yh = VM_VFMERGE_VFM (yh, 1.0 - 1.0e-300, mbig, vl);	/* |x| > 22 */
-    yl = VM_VFMERGE_VFM (yl, 0.0, mbig, vl);
-    yh = VM_VFMERGE_VVM (yh, VM_VFNEG_V (yh, vl), mneg, vl);
-    yl = VM_VFMERGE_VVM (yl, VM_VFNEG_V (yl, vl), mneg, vl);
-  }
-  /* tanh(tiny) = tiny: masked, because x*(x+1) overflows on the |x| >
-     1e154 lanes that are nowhere near this branch.  */
-  yh = VM_VFMERGE_VVM (yh, VM_VFMUL_VV_M (msmall, x, VM_VFADD_VF (x, 1.0, vl),
-					  vl), msmall, vl);
-  yl = VM_VFMERGE_VFM (yl, 0.0, msmall, vl);
-  {
-    /* +-Inf -> +-1 as 1/x +- 1 (1/x is 0 there and raises nothing); the
-       reciprocal input is masked to the non-finite lanes, so neither the
-       +-0 lanes (division by zero) nor the huge finite ones (1/1.8e308
-       underflows to subnormal) contribute a flag.  NaN stays NaN.  */
-    vm_f_t iv = VM_VFRDIV_VF (
-      VM_VFMERGE_VFM (x, 1.0, VM_VMNOT_M (mnonfin, vl), vl), 1.0, vl);
-    vm_f_t s = VM_VFMERGE_VVM (VM_VFADD_VF (iv, 1.0, vl),
-			       VM_VFSUB_VF (iv, 1.0, vl), mneg, vl);
-    yh = VM_VFMERGE_VVM (yh, s, mnonfin, vl);
-    yl = VM_VFMERGE_VFM (yl, 0.0, mnonfin, vl);
-  }
-  {
-    vm_f_t vr;
-    VM_HYP_COLLAPSE (vr, yh, yl, vl);
-    return vr;
-  }
+  return z;
 }

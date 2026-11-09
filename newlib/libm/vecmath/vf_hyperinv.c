@@ -1,7 +1,9 @@
 /* vf_hyperinv.c -- binary32 array API entries for asinh / acosh / atanh.
 
    Part of the newlib RISC-V vector math library (libvecmath); see
-   <vecmath.h> for the API contract.  */
+   <vecmath.h> for the API contract.  The native binary32 kernels form
+   their log arguments in f32 double-float and keep a per-lane scalar
+   epilogue, so this translation unit no longer needs the binary64 layer.  */
 
 #include <vecmath.h>
 
@@ -10,16 +12,10 @@
 #include <riscv_vector.h>
 #include <math.h>
 
-#define VM_LMUL 4
-#include <vecmath_rvvcompat.h>
-#include <vecmath_dd.h>
-#include "vecmath_local.h"
-#include <k_log.inc>
-#include <k_hyperinv.inc>
-
 #define VM32_LMUL 2
 #include <f32/compat.h>
 #include <f32/wrap.h>
+#include <f32/k_log.inc>
 #include <f32/k_hyperinv.inc>
 
 void
