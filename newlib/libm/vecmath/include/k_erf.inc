@@ -310,7 +310,7 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
    and keeping it in its own function lets the compiler give it a clean
    register budget instead of spilling against the other bands.  Returns
    the pair 2^512 up.  */
-__attribute__ ((noinline)) static vm_f_t
+static inline __attribute__ ((always_inline)) vm_f_t
 VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
 		    vm_u64_t vau, size_t vl, vm_f_t *rlo)
 {
@@ -352,6 +352,29 @@ VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
   return mf_th;
 }
 
+/* 0.25 <= |x| < 1.25: degree-19 dd interpolant in v = |x| - 0.75, out of
+   line.  It needs about seven vector groups, which fits in the sixteen
+   caller-saved ones, so the call neither saves registers nor spills -- and
+   the erfc entry's hot loop stays small enough to keep the inline tail in
+   registers.  */
+__attribute__ ((noinline)) static vm_f_t
+VM_KFN (erfc_mid) (vm_f_t x, size_t vl)
+{
+  vm_f_t vax = VM_FROM_BITS (
+    VM_VAND_VX (VM_BITS (x), VM_ABSMASK_U64, (vl)));
+  vm_f_t v = VM_VFSUB_VF (vax, 0.75, (vl));
+  vm_f_t ph, pl;
+  VM_ERFC_MID_POLY (ph, pl, v, (vl));
+  /* x < 0: erfc(x) = 2 - erfc(|x|), in dd, one rounding at the end.  */
+  vm_b_t mneg = VM_VMSGEU_VX (VM_BITS (x), VM_ERF_BSIGN, (vl));
+  vm_f_t nh, nl;
+  VM_TWO_SUM (nh, nl, VM_VFMV_V_F (2.0, (vl)), VM_VFNEG_V (ph, (vl)), (vl));
+  nl = VM_VFSUB_VV (nl, pl, (vl));
+  ph = VM_VFMERGE_VVM (ph, nh, mneg, (vl));
+  pl = VM_VFMERGE_VVM (pl, nl, mneg, (vl));
+  return VM_VFADD_VV (ph, pl, (vl));
+}
+
 static inline vm_f_t
 VM_KFN (erfc) (vm_f_t x, size_t vl)
 {
@@ -388,50 +411,29 @@ VM_KFN (erfc) (vm_f_t x, size_t vl)
       mf_res = VM_VFMERGE_VVM (mf_res, mf_r0, mf_q1, (vl));
     }
 
-  /* ---- 0.25 <= |x| < 1.25: dd polynomial; 1.25 <= |x|: dd tail.  Both
-     hand back their pair 2^512 up so the common finish below is one
-     rounding for either band.  ---- */
-  vm_f_t mf_rh = vzero, mf_rl = vzero;
+  /* ---- 0.25 <= |x| < 1.25: out-of-line dd polynomial ---- */
   if (VM_VFIRST_M (mf_mid, (vl)) >= 0)
-    {
-      vm_f_t mf_v = VM_VFSUB_VF (VM_VFMERGE_VVM (vzero, vax, mf_mid, (vl)),
-				 0.75, (vl));
-      vm_f_t mf_ph, mf_pl;
-      VM_ERFC_MID_POLY (mf_ph, mf_pl, mf_v, (vl));
-      /* keep the pair 2^512 up, as the tail does: the final collapse
-         scales both bands back with one rounding and no spurious
-         underflow on the tiny low parts.  */
-      mf_rh = VM_VFMERGE_VVM (mf_rh, VM_VFMUL_VF (mf_ph, VM_ERF_S, (vl)),
-			      mf_mid, (vl));
-      mf_rl = VM_VFMERGE_VVM (mf_rl, VM_VFMUL_VF (mf_pl, VM_ERF_S, (vl)),
-			      mf_mid, (vl));
-    }
+    mf_res = VM_VFMERGE_VVM (mf_res, VM_KFN (erfc_mid) (x, (vl)), mf_mid,
+			     (vl));
 
   /* ---- 1.25 <= |x|: dd tail, evaluated 2^512 up ---- */
   if (VM_VFIRST_M (mf_tail, (vl)) >= 0)
     {
       vm_f_t mf_tlo, mf_thi = VM_KFN (erfc_tail) (x, vax, mf_neg, mf_tail,
 						vau, (vl), &mf_tlo);
-      mf_rh = VM_VFMERGE_VVM (mf_rh, mf_thi, mf_tail, (vl));
-      mf_rl = VM_VFMERGE_VVM (mf_rl, mf_tlo, mf_tail, (vl));
-    }
-
-  /* ---- common finish for the mid+tail pair: x < 0 becomes 2-erfc(|x|)
-     in dd (2^513 is 2 in the 2^512-scaled domain) and one rounding
-     scales back.  ---- */
-  if (VM_VFIRST_M (VM_VMOR_MM (mf_mid, mf_tail, (vl)), (vl)) >= 0)
-    {
-      vm_b_t mf_ne = VM_VMAND_MM (mf_neg,
-				  VM_VMOR_MM (mf_mid, mf_tail, (vl)), (vl));
+      /* x < 0 lanes: 2 - erfc(|x|) in the 2^512-scaled dd domain
+	 (2^513 is 2 there), then the one rounding that scales back.  */
+      vm_b_t mf_ne = VM_VMAND_MM (mf_neg, mf_tail, (vl));
       vm_f_t mf_nh, mf_nl;
       VM_TWO_SUM (mf_nh, mf_nl, VM_VFMV_V_F (VM_ERF_S2, (vl)),
-		  VM_VFNEG_V (mf_rh, (vl)), (vl));
-      mf_nl = VM_VFSUB_VV (mf_nl, mf_rl, (vl));
-      mf_rh = VM_VFMERGE_VVM (mf_rh, mf_nh, mf_ne, (vl));
-      mf_rl = VM_VFMERGE_VVM (mf_rl, mf_nl, mf_ne, (vl));
+		  VM_VFNEG_V (mf_thi, (vl)), (vl));
+      mf_nl = VM_VFSUB_VV (mf_nl, mf_tlo, (vl));
+      mf_thi = VM_VFMERGE_VVM (mf_thi, mf_nh, mf_ne, (vl));
+      mf_tlo = VM_VFMERGE_VVM (mf_tlo, mf_nl, mf_ne, (vl));
       mf_res = VM_VFMERGE_VVM (
-	mf_res, VM_VFMUL_VF (VM_VFADD_VV (mf_rh, mf_rl, (vl)), VM_ERF_SINV, (vl)),
-	VM_VMOR_MM (mf_mid, mf_tail, (vl)), (vl));
+	mf_res,
+	VM_VFMUL_VF (VM_VFADD_VV (mf_thi, mf_tlo, (vl)), VM_ERF_SINV, (vl)),
+	mf_tail, (vl));
     }
 
   /* ---- NaN/Inf: (2*signbit) + 1/x ---- */
