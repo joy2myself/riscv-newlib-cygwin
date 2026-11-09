@@ -288,11 +288,25 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
 /* ---- erfc --------------------------------------------------------- */
 
 /* dd Horner of the degree-19 midpoint polynomial; v is exact.  */
+/* Degree-19 dd interpolant, mixed-precision Horner: the high-order terms
+   run in plain double (their partial sums are tiny and every error there
+   is damped by v^k), then the low-order terms run in double-double.
+   Verified against the exact polynomial: 0.000 ulp difference over
+   v in [-0.5, 0.5] with the plain part down to coefficient 7, and 1.0 ulp
+   with one more plain step, so the split sits at the edge.  It shortens
+   the dependency chain, which is what this band is bound by (the same
+   polynomial in a pure plain-double Horner makes the band free, and a
+   pure dd Horner costs ~60 ns/element).  */
 #define VM_ERFC_MID_POLY(ph, pl, v, vl) do {				\
   int vemi;								\
   (ph) = VM_VFMV_V_F (vm_erfc_mid[19][0], (vl));			\
-  (pl) = VM_VFMV_V_F (vm_erfc_mid[19][1], (vl));			\
-  for (vemi = 18; vemi >= 0; vemi--)					\
+  for (vemi = 18; vemi >= 7; vemi--)					\
+    {									\
+      (ph) = VM_VFMUL_VV ((ph), (v), (vl));				\
+      (ph) = VM_VFADD_VF ((ph), vm_erfc_mid[vemi][0], (vl));	\
+    }									\
+  (pl) = VM_VFMV_V_F (0.0, (vl));					\
+  for (vemi = 6; vemi >= 0; vemi--)					\
     {									\
       vm_f_t vemi_u, vemi_e, vemi_s, vemi_t;				\
       VM_TWO_PROD (vemi_u, vemi_e, (ph), (v), (vl));			\
@@ -334,8 +348,26 @@ VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
   VM_ERF_EXP_DD (mf_eh, mf_el, mf_ah, (vl));
   vm_f_t mf_rho;
   vm_b_t mf_rb = VM_VMSGEU_VX (VM_BITS (mf_targ), VM_ERF_B286, (vl));
-  VM_ERF_RHO (mf_rho, VM_VFRDIV_VF (VM_VFMUL_VV (mf_targ, mf_targ, (vl)),
-					1.0, (vl)), mf_rb, (vl));
+  /* One reciprocal feeds both the tail factor's s = 1/x^2 and the
+     final dd division: the dd-corrected (rt, rt_lo) is good to ~2^-105,
+     and s = (rt + rt_lo)^2 rebuilt with one fma keeps that accuracy, so
+     the tail does one division where it used to do three.  */
+  vm_f_t mf_rt = VM_VFRDIV_VF (mf_targ, 1.0, (vl));
+  vm_f_t mf_rte = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)),
+				VM_VFNEG_V (mf_rt, (vl)), mf_targ, (vl));
+  vm_f_t mf_rtl = VM_VFMUL_VV (mf_rt, mf_rte, (vl));
+  /* s = 1/targ^2 rebuilt from the reciprocal: the rounding of rt*rt is
+     recovered with an fma residual and the 2*rt*rt_lo correction is added
+     into that residual, so the single final rounding leaves s within half
+     an ulp -- which matters, because rho's sensitivity to s is ~6 ulp of
+     result per ulp of s.  No second division.  */
+  vm_f_t mf_rt2 = VM_VFMUL_VV (mf_rt, mf_rt, (vl));
+  vm_f_t mf_rt2e = VM_VFMACC_VV (VM_VFNEG_V (mf_rt2, (vl)), mf_rt, mf_rt, (vl));
+  mf_rt2e = VM_VFADD_VV (mf_rt2e,
+			 VM_VFMUL_VF (VM_VFMUL_VV (mf_rt, mf_rtl, (vl)),
+				      2.0, (vl)), (vl));
+  vm_f_t mf_sinv = VM_VFADD_VV (mf_rt2, mf_rt2e, (vl));
+  VM_ERF_RHO (mf_rho, mf_sinv, mf_rb, (vl));
   vm_f_t mf_sq = VM_VFMUL_VV (mf_rho, mf_rho, (vl));
   vm_f_t mf_q;
   VM_ERF_HOR (mf_q, vm_erf_e1, 12, mf_rho, (vl));
@@ -346,8 +378,7 @@ VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
   mf_fl = VM_VFMACC_VV (mf_fl, mf_al, mf_s, (vl));
   vm_f_t mf_dh, mf_dl;
   VM_DD_MUL (mf_dh, mf_dl, mf_eh, mf_el, mf_fh, mf_fl, (vl));
-  VM_DD_DIV (mf_th, mf_tl, mf_dh, mf_dl, mf_targ,
-		 VM_VFMV_V_F (0.0, (vl)), (vl));
+  VM_DD_MUL (mf_th, mf_tl, mf_dh, mf_dl, mf_rt, mf_rtl, (vl));
   *rlo = mf_tl;
   return mf_th;
 }

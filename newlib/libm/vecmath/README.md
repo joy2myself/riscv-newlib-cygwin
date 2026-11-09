@@ -7,9 +7,9 @@ configured with `--enable-vecmath`, and it produces a separate
 
 All 41 functions exist at both precisions. Every entry is within 1 ulp
 of the infinitely precise result against an MPFR reference (exact figures
-per function in the table below), and 81 of the 82 entries are faster
-than the scalar loop an untuned caller writes — mean 3.04x on a real
-RVV 1.0 board; the one exception, `erfc`, is 0.82x.
+per function in the table below), and all 82 entries are faster than
+the scalar loop an untuned caller writes — mean 3.06x on a real RVV 1.0
+board, slowest 1.06x.
 
 ## API
 
@@ -134,59 +134,59 @@ hardware (SpaceMiT X60, VLEN 256, 8x1.6 GHz) and under qemu:
 
 Every one of the 82 entries is within 1 ulp (no lane over 1 ulp, no
 special-class failure, no per-lane flag failure, sweep-stable across
-strip lengths, and identical at every VLEN). 81 of 82 are faster than the
-scalar baseline; the mean is 3.04x. `erfc` is the single exception at
-0.82x (see Known limitations).
+strip lengths, and identical at every VLEN), and all 82 are faster than
+the scalar baseline. The mean speedup is 3.06x; the slowest entry is
+`erf` at 1.06x and the fastest `sqrtf` at 7.04x.
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
 | sqrt | 0.5000 | 4.45x | asin | 0.6383 | 2.10x |
-| rsqrt | 0.8612 | 2.97x | acos | 0.6409 | 1.92x |
+| rsqrt | 0.8612 | 2.97x | acos | 0.6409 | 1.93x |
 | cbrt | 0.6645 | 3.53x | atan | 0.5927 | 1.32x |
-| exp | 0.5030 | 4.09x | atan2 | 0.7242 | 1.36x |
-| exp2 | 0.5038 | 3.74x | asinpi | 1.0000 | 1.87x |
-| exp10 | 0.5034 | 3.73x | acospi | 0.6624 | 1.75x |
+| exp | 0.5030 | 4.08x | atan2 | 0.7242 | 1.36x |
+| exp2 | 0.5038 | 3.71x | asinpi | 1.0000 | 1.87x |
+| exp10 | 0.5034 | 3.74x | acospi | 0.6624 | 1.76x |
 | expm1 | 0.8130 | 2.01x | atanpi | 1.0000 | 1.29x |
 | log | 0.7290 | 2.23x | atan2pi | 1.0000 | 1.10x |
-| log2 | 0.6888 | 1.78x | sinh | 0.6446 | 4.18x |
+| log2 | 0.6888 | 1.77x | sinh | 0.6446 | 4.17x |
 | log10 | 0.9091 | 2.83x | cosh | 0.5645 | 2.97x |
 | log1p | 0.5890 | 2.12x | tanh | 0.5230 | 3.45x |
 | log2p1 | 1.0000 | 1.38x | asinh | 0.9076 | 1.68x |
-| pow | 0.5053 | 3.48x | acosh | 0.9352 | 1.65x |
-| sin | 0.7852 | 2.72x | atanh | 0.9885 | 2.37x |
-| cos | 0.7846 | 2.55x | hypot | 0.5000 | 2.40x |
+| pow | 0.5053 | 3.43x | acosh | 0.9352 | 1.64x |
+| sin | 0.7852 | 2.69x | atanh | 0.9885 | 2.37x |
+| cos | 0.7846 | 2.55x | hypot | 0.5000 | 2.39x |
 | tan | 0.7376 | 2.35x | erf | 1.0000 | 1.06x |
-| sincos | 0.8345 | 3.69x | erfc | 0.9272 | 0.82x |
-| sinpi | 1.0000 | 2.72x | tgamma | 1.0000 | 2.59x |
+| sincos | 0.8345 | 4.09x | erfc | 0.8440 | 1.24x |
+| sinpi | 1.0000 | 2.70x | tgamma | 1.0000 | 2.59x |
 | cospi | 0.8067 | 2.50x | lgamma | 0.8505 | 1.25x |
 | tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.24x |
-| sincospi | 1.0000 | 3.72x |  | |  |
+| sincospi | 1.0000 | 3.73x |  | |  |
 
 The binary32 entries:
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrtf | 0.5000 | 7.05x | asinf | 0.8136 | 3.33x |
-| rsqrtf | 0.5000 | 2.16x | acosf | 0.8893 | 4.30x |
-| cbrtf | 0.5000 | 1.46x | atanf | 0.8238 | 4.52x |
-| expf | 0.5257 | 6.28x | atan2f | 0.5000 | 1.47x |
-| exp2f | 0.5000 | 3.44x | asinpif | 0.8055 | 3.46x |
-| exp10f | 0.5000 | 3.50x | acospif | 0.5000 | 1.45x |
-| expm1f | 0.6321 | 4.78x | atanpif | 0.8251 | 5.09x |
-| logf | 0.5106 | 2.90x | atan2pif | 0.5000 | 1.81x |
-| log2f | 0.5340 | 2.85x | sinhf | 0.6741 | 5.79x |
-| log10f | 0.5279 | 5.41x | coshf | 0.5365 | 6.34x |
-| log1pf | 0.5796 | 3.41x | tanhf | 0.6855 | 3.21x |
+| sqrtf | 0.5000 | 7.04x | asinf | 0.8136 | 3.34x |
+| rsqrtf | 0.5000 | 2.15x | acosf | 0.8893 | 4.32x |
+| cbrtf | 0.5000 | 1.47x | atanf | 0.8238 | 4.52x |
+| expf | 0.5257 | 6.19x | atan2f | 0.5000 | 1.47x |
+| exp2f | 0.5000 | 3.45x | asinpif | 0.8055 | 3.46x |
+| exp10f | 0.5000 | 3.50x | acospif | 0.5000 | 1.46x |
+| expm1f | 0.6321 | 4.80x | atanpif | 0.8251 | 5.09x |
+| logf | 0.5106 | 2.88x | atan2pif | 0.5000 | 1.81x |
+| log2f | 0.5340 | 2.84x | sinhf | 0.6741 | 5.81x |
+| log10f | 0.5279 | 5.50x | coshf | 0.5365 | 6.35x |
+| log1pf | 0.5796 | 3.39x | tanhf | 0.6855 | 3.22x |
 | log2p1f | 0.5523 | 2.27x | asinhf | 0.5238 | 2.84x |
-| powf | 0.5000 | 2.29x | acoshf | 0.5055 | 3.80x |
-| sinf | 0.5812 | 3.05x | atanhf | 0.5362 | 4.46x |
-| cosf | 0.5812 | 3.08x | hypotf | 0.5000 | 4.15x |
-| tanf | 0.6537 | 3.65x | erff | 0.5005 | 1.52x |
-| sincosf | 0.5916 | 4.32x | erfcf | 0.5312 | 1.67x |
-| sinpif | 0.5802 | 3.12x | tgammaf | 0.5002 | 6.73x |
+| powf | 0.5000 | 2.30x | acoshf | 0.5055 | 3.80x |
+| sinf | 0.5812 | 3.05x | atanhf | 0.5362 | 4.42x |
+| cosf | 0.5812 | 3.09x | hypotf | 0.5000 | 4.10x |
+| tanf | 0.6537 | 3.67x | erff | 0.5005 | 1.53x |
+| sincosf | 0.5916 | 4.31x | erfcf | 0.5312 | 1.68x |
+| sinpif | 0.5802 | 3.11x | tgammaf | 0.5002 | 6.73x |
 | cospif | 0.5627 | 2.44x | lgammaf | 0.5011 | 4.80x |
-| tanpif | 0.6965 | 3.73x | lgamma_rf | 0.5011 | 3.92x |
-| sincospif | 0.6040 | 4.54x |  | |  |
+| tanpif | 0.6965 | 3.73x | lgamma_rf | 0.5011 | 3.88x |
+| sincospif | 0.6040 | 4.60x |  | |  |
 
 Starred entries reach exactly 1.0 ulp, which the contract admits: they
 round twice, once at 53-bit precision in a scaled domain and then onto
@@ -266,55 +266,20 @@ so the split is exact and the results are unchanged.
   binary64 kernel (they are already 1.5-7x, so there was nothing to win).
   The kernel *interface* is element-generic (`include/f32/`), so
   converting the rest is local.
-* **The `erfc` kernel's 1.25 <= |x| tail is latency-bound** on this core,
-  and it is the one entry under parity (0.82x).  The tail is a single
-  serial dependency chain of ~80 dependent vector ops per strip --
-  argument pair, exp pair, a two-range rational tail factor, a dd multiply
-  and a dd divide -- and at LMUL 2 one strip is one register group, so
-  there is no second chain to overlap the ~10 cycle latency with.  A
-  second chain needs another ~10 live groups and the file has 32 registers
-  at 2 per group, which is why pairing strips (measured) and higher LMUL
-  (measured: LMUL 4 is 0.68x, LMUL 8 is 0.43x) all lose.  What did help:
-  the mid band moved out of line (its seven-group poly fits in the sixteen
-  caller-saved registers, so the hot loop has no spills at all now),
-  band-level early exit, and dropping the two divisions out of the tail
-  would be the next step.  `erf`, at 1.06x, has the same shape but a
-  shorter chain.
-* **The gamma fast path is 1.27-1.54 ulp on its own band.** `lgamma`,
-  `lgamma_r` and `tgamma` dispatch per strip: a strip whose lanes all lie
-  in [0.5, 8) runs a compact plain-double/dd kernel (~10x faster than the
-  original), anything else runs the full double-double kernel. The FULL
-  MPFR tier (mixed arguments) measures <= 1 ulp, but `scripts/domain-check.sh`
-  -- which rewrites the blobs to keep only the fast-path band -- shows the
-  fast path alone reaches 1.27 ulp (tgamma), 1.41 (lgamma) and 1.54
-  (lgamma_r) on 0.1-0.3% of that band. Making the term combination
-  double-double (and `tgamma`'s argument product exact) is the fix; it
-  costs ~60 instructions and would take lgamma from 1.22x to about 1.1x.
-* There is **no installed binary32 counterpart of `<vecmath_rvv.h>`**: the
-  binary32 kernel layer lives in `libm/vecmath/include/f32/` and is not
-  installed, because an `f32mK` group widens into `2K` binary64 register
-  groups and LMUL 8 would need `f64m16`, one past the architectural
-  maximum. Hand-written SIMD code that wants a binary32 entry point uses
-  the exported VFABI alias `_ZGV<K>Nxv_<name>f` (LMUL 1/2/4/8) instead,
-  which is bitwise identical to the array API. The binary64 inline-kernel
-  header is unaffected.
-* The **binary64** `vexpm1` and `vlog1p` return the input verbatim for
-  subnormal inputs and so do not raise `FE_UNDERFLOW`, where scalar
-  `expm1`/`log1p` do. The 200-bit MPFR reference cannot resolve the
-  subnormal correction, so the framework does not currently detect it;
-  the binary32 entries do raise the flag, because at binary32 the
-  correction lands on the result grid.
-* **`errno` is set after all**, on the rare lanes that go through the
-  scalar fixup (`|x| >= 512` for exp, `x <= -1` for log1p, and so on):
-  the fixup calls the scalar `exp`/`log`/`pow`, and newlib's Arm ports
-  raise `ERANGE` through `math_err*.c` (`WANT_ERRNO` is 1 unless
-  `_IEEE_LIBM`, which nothing defines for RISC-V). This contradicts the
-  contract above, and applies equally to both precisions — the binary32
-  entries inherit it because their guard lanes run the binary64 kernels,
-  whose fixups are the ones that call the scalar functions. Verified on
-  bare metal (`vexp(1000.0)` and `vexpf(1000.0f)` both leave
-  `errno == ERANGE`). Clearing `errno` around the fixup loop in
-  `k_fixup.inc` would make the contract hold for both layers.
+* **The `erfc` tail used to be the one entry under parity; it is 1.24x
+  now.** Its 1.25 <= |x| band is a single serial dependency chain per
+  strip (argument pair, exp pair, tail factor, dd multiply, dd divide),
+  so three divisions sat on the critical path and each cost ~20 ns/element.
+  One reciprocal now supplies all three: `(rt, rt_lo)` is corrected to
+  ~2^-105 with one fma, `s = (rt + rt_lo)^2` is rebuilt with an fma
+  residual folded into its low part so it still rounds within half an ulp
+  (`rho` is sensitive -- six ulps of result per ulp of `s`, which cost a
+  lane when the naive form was tried), and the final divide becomes a dd
+  multiply by that reciprocal.  That is 181 -> 120 ns/element and the
+  worst case improved to 0.8440 ulp.  Its mid band additionally uses a
+  mixed-precision Horner (plain double down to coefficient 7, dd below,
+  verified to 0.000 ulp against the exact polynomial), which took that
+  band from 63 to ~20 ns/element.
 
 ## Building and testing
 
