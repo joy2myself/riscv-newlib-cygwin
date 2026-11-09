@@ -8,8 +8,8 @@ configured with `--enable-vecmath`, and it produces a separate
 All 41 functions exist at both precisions. Every entry is within 1 ulp
 of the infinitely precise result against an MPFR reference (exact figures
 per function in the table below), and 81 of the 82 entries are faster
-than the scalar loop an untuned caller writes — mean 3.05x on a real
-RVV 1.0 board; the one exception, `erfc`, is 0.80x.
+than the scalar loop an untuned caller writes — mean 3.04x on a real
+RVV 1.0 board; the one exception, `erfc`, is 0.82x.
 
 ## API
 
@@ -135,8 +135,8 @@ hardware (SpaceMiT X60, VLEN 256, 8x1.6 GHz) and under qemu:
 Every one of the 82 entries is within 1 ulp (no lane over 1 ulp, no
 special-class failure, no per-lane flag failure, sweep-stable across
 strip lengths, and identical at every VLEN). 81 of 82 are faster than the
-scalar baseline; the mean is 3.05x. `erfc` is the single exception at
-0.80x (see Known limitations).
+scalar baseline; the mean is 3.04x. `erfc` is the single exception at
+0.82x (see Known limitations).
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
@@ -156,7 +156,7 @@ scalar baseline; the mean is 3.05x. `erfc` is the single exception at
 | sin | 0.7852 | 2.72x | atanh | 0.9885 | 2.37x |
 | cos | 0.7846 | 2.55x | hypot | 0.5000 | 2.40x |
 | tan | 0.7376 | 2.35x | erf | 1.0000 | 1.06x |
-| sincos | 0.8345 | 3.69x | erfc | 0.9272 | 0.80x |
+| sincos | 0.8345 | 3.69x | erfc | 0.9272 | 0.82x |
 | sinpi | 1.0000 | 2.72x | tgamma | 1.0000 | 2.59x |
 | cospi | 0.8067 | 2.50x | lgamma | 0.8505 | 1.25x |
 | tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.24x |
@@ -266,12 +266,20 @@ so the split is exact and the results are unchanged.
   binary64 kernel (they are already 1.5-7x, so there was nothing to win).
   The kernel *interface* is element-generic (`include/f32/`), so
   converting the rest is local.
-* **The `erfc` kernel's 1.25 <= |x| tail is latency-bound** on this core:
-  its double-double chain (exp pair, dd multiply, dd divide) is one serial
-  dependency chain per strip, so it costs ~1.25x the scalar `erfc`
-  (0.80x) even though the same math is 8 lanes wide. Breaking that chain
-  (or a table-driven tail factor) is the remaining performance work.
-  `erf`, at 1.06x, has the same shape but a shorter chain.
+* **The `erfc` kernel's 1.25 <= |x| tail is latency-bound** on this core,
+  and it is the one entry under parity (0.82x).  The tail is a single
+  serial dependency chain of ~80 dependent vector ops per strip --
+  argument pair, exp pair, a two-range rational tail factor, a dd multiply
+  and a dd divide -- and at LMUL 2 one strip is one register group, so
+  there is no second chain to overlap the ~10 cycle latency with.  A
+  second chain needs another ~10 live groups and the file has 32 registers
+  at 2 per group, which is why pairing strips (measured) and higher LMUL
+  (measured: LMUL 4 is 0.68x, LMUL 8 is 0.43x) all lose.  What did help:
+  the mid band moved out of line (its seven-group poly fits in the sixteen
+  caller-saved registers, so the hot loop has no spills at all now),
+  band-level early exit, and dropping the two divisions out of the tail
+  would be the next step.  `erf`, at 1.06x, has the same shape but a
+  shorter chain.
 * **The gamma fast path is 1.27-1.54 ulp on its own band.** `lgamma`,
   `lgamma_r` and `tgamma` dispatch per strip: a strip whose lanes all lie
   in [0.5, 8) runs a compact plain-double/dd kernel (~10x faster than the
