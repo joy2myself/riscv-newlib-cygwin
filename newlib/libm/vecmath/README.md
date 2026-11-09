@@ -259,8 +259,8 @@ so the split is exact and the results are unchanged.
   converting the rest is local.
 * **The `erfc` kernel's 1.25 <= |x| tail is latency-bound** on this core:
   its double-double chain (exp pair, dd multiply, dd divide) is one serial
-  dependency chain per strip, so it costs ~1.9x the scalar `erfc`
-  (0.77x) even though the same math is 8 lanes wide. Breaking that chain
+  dependency chain per strip, so it costs ~1.25x the scalar `erfc`
+  (0.80x) even though the same math is 8 lanes wide. Breaking that chain
   (or a table-driven tail factor) is the remaining performance work.
   `erf`, at 1.06x, has the same shape but a shorter chain.
 * **The gamma fast path is 1.27-1.54 ulp on its own band.** `lgamma`,
