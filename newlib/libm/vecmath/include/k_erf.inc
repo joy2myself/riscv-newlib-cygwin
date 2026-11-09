@@ -305,6 +305,53 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
     }									\
 } while (0)
 
+/* The 1.25 <= |x| erfc tail, out of line: it is the widest dependency
+   chain in the library (a double-double exp pair, multiply and divide),
+   and keeping it in its own function lets the compiler give it a clean
+   register budget instead of spilling against the other bands.  Returns
+   the pair 2^512 up.  */
+__attribute__ ((noinline)) static vm_f_t
+VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
+		    vm_u64_t vau, size_t vl, vm_f_t *rlo)
+{
+  vm_f_t vone = VM_VFMV_V_F (1.0, (vl));
+  vm_f_t mf_th, mf_tl;
+  vm_f_t mf_targ = VM_VFMIN_VF (VM_VFMAX_VF (vax, 1.25, (vl)), 29.0, (vl));
+  mf_targ = VM_VFMERGE_VFM (mf_targ, 25.0,
+				VM_VMAND_MM (mf_neg,
+					     VM_VMSGTU_VX (vau, VM_ERF_B6, (vl)),
+					     (vl)), (vl));
+  vm_f_t mf_x2h, mf_x2l;
+  VM_TWO_PROD (mf_x2h, mf_x2l, mf_targ, mf_targ, (vl));
+  vm_f_t mf_t0h, mf_t0l, mf_ah, mf_al;
+  VM_TWO_SUM (mf_t0h, mf_t0l, VM_VFNEG_V (mf_x2h, (vl)),
+		  VM_VFMV_V_F (-0.5625, (vl)), (vl));
+  VM_TWO_SUM (mf_ah, mf_al, mf_t0h, VM_VFMV_V_F (VM_ERF_SLN2H, (vl)), (vl));
+  mf_al = VM_VFADD_VV (VM_VFADD_VV (mf_t0l, mf_al, (vl)),
+			   VM_VFMV_V_F (VM_ERF_SLN2L, (vl)), (vl));
+  mf_al = VM_VFSUB_VV (mf_al, mf_x2l, (vl));
+  vm_f_t mf_eh, mf_el;
+  VM_ERF_EXP_DD (mf_eh, mf_el, mf_ah, (vl));
+  vm_f_t mf_rho;
+  vm_b_t mf_rb = VM_VMSGEU_VX (VM_BITS (mf_targ), VM_ERF_B286, (vl));
+  VM_ERF_RHO (mf_rho, VM_VFRDIV_VF (VM_VFMUL_VV (mf_targ, mf_targ, (vl)),
+					1.0, (vl)), mf_rb, (vl));
+  vm_f_t mf_sq = VM_VFMUL_VV (mf_rho, mf_rho, (vl));
+  vm_f_t mf_q;
+  VM_ERF_HOR (mf_q, vm_erf_e1, 12, mf_rho, (vl));
+  vm_f_t mf_s = VM_VFMACC_VV (mf_rho, mf_sq, mf_q, (vl));	/* expm1 */
+  vm_f_t mf_fh, mf_fl;
+  VM_TWO_SUM (mf_fh, mf_fl, vone, mf_s, (vl));
+  mf_fl = VM_VFADD_VV (mf_fl, mf_al, (vl));
+  mf_fl = VM_VFMACC_VV (mf_fl, mf_al, mf_s, (vl));
+  vm_f_t mf_dh, mf_dl;
+  VM_DD_MUL (mf_dh, mf_dl, mf_eh, mf_el, mf_fh, mf_fl, (vl));
+  VM_DD_DIV (mf_th, mf_tl, mf_dh, mf_dl, mf_targ,
+		 VM_VFMV_V_F (0.0, (vl)), (vl));
+  *rlo = mf_tl;
+  return mf_th;
+}
+
 static inline vm_f_t
 VM_KFN (erfc) (vm_f_t x, size_t vl)
 {
@@ -363,41 +410,10 @@ VM_KFN (erfc) (vm_f_t x, size_t vl)
   /* ---- 1.25 <= |x|: dd tail, evaluated 2^512 up ---- */
   if (VM_VFIRST_M (mf_tail, (vl)) >= 0)
     {
-      vm_f_t mf_th, mf_tl;
-      vm_f_t mf_targ = VM_VFMIN_VF (VM_VFMAX_VF (vax, 1.25, (vl)), 29.0, (vl));
-      mf_targ = VM_VFMERGE_VFM (mf_targ, 25.0,
-				VM_VMAND_MM (mf_neg,
-					     VM_VMSGTU_VX (vau, VM_ERF_B6, (vl)),
-					     (vl)), (vl));
-      vm_f_t mf_x2h, mf_x2l;
-      VM_TWO_PROD (mf_x2h, mf_x2l, mf_targ, mf_targ, (vl));
-      vm_f_t mf_t0h, mf_t0l, mf_ah, mf_al;
-      VM_TWO_SUM (mf_t0h, mf_t0l, VM_VFNEG_V (mf_x2h, (vl)),
-		  VM_VFMV_V_F (-0.5625, (vl)), (vl));
-      VM_TWO_SUM (mf_ah, mf_al, mf_t0h, VM_VFMV_V_F (VM_ERF_SLN2H, (vl)), (vl));
-      mf_al = VM_VFADD_VV (VM_VFADD_VV (mf_t0l, mf_al, (vl)),
-			   VM_VFMV_V_F (VM_ERF_SLN2L, (vl)), (vl));
-      mf_al = VM_VFSUB_VV (mf_al, mf_x2l, (vl));
-      vm_f_t mf_eh, mf_el;
-      VM_ERF_EXP_DD (mf_eh, mf_el, mf_ah, (vl));
-      vm_f_t mf_rho;
-      vm_b_t mf_rb = VM_VMSGEU_VX (VM_BITS (mf_targ), VM_ERF_B286, (vl));
-      VM_ERF_RHO (mf_rho, VM_VFRDIV_VF (VM_VFMUL_VV (mf_targ, mf_targ, (vl)),
-					1.0, (vl)), mf_rb, (vl));
-      vm_f_t mf_sq = VM_VFMUL_VV (mf_rho, mf_rho, (vl));
-      vm_f_t mf_q;
-      VM_ERF_HOR (mf_q, vm_erf_e1, 12, mf_rho, (vl));
-      vm_f_t mf_s = VM_VFMACC_VV (mf_rho, mf_sq, mf_q, (vl));	/* expm1 */
-      vm_f_t mf_fh, mf_fl;
-      VM_TWO_SUM (mf_fh, mf_fl, vone, mf_s, (vl));
-      mf_fl = VM_VFADD_VV (mf_fl, mf_al, (vl));
-      mf_fl = VM_VFMACC_VV (mf_fl, mf_al, mf_s, (vl));
-      vm_f_t mf_dh, mf_dl;
-      VM_DD_MUL (mf_dh, mf_dl, mf_eh, mf_el, mf_fh, mf_fl, (vl));
-      VM_DD_DIV (mf_th, mf_tl, mf_dh, mf_dl, mf_targ,
-		 VM_VFMV_V_F (0.0, (vl)), (vl));
-      mf_rh = VM_VFMERGE_VVM (mf_rh, mf_th, mf_tail, (vl));
-      mf_rl = VM_VFMERGE_VVM (mf_rl, mf_tl, mf_tail, (vl));
+      vm_f_t mf_tlo, mf_thi = VM_KFN (erfc_tail) (x, vax, mf_neg, mf_tail,
+						vau, (vl), &mf_tlo);
+      mf_rh = VM_VFMERGE_VVM (mf_rh, mf_thi, mf_tail, (vl));
+      mf_rl = VM_VFMERGE_VVM (mf_rl, mf_tlo, mf_tail, (vl));
     }
 
   /* ---- common finish for the mid+tail pair: x < 0 becomes 2-erfc(|x|)
