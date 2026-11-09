@@ -8,8 +8,8 @@ configured with `--enable-vecmath`, and it produces a separate
 All 41 functions exist at both precisions. Every entry is within 1 ulp
 of the infinitely precise result against an MPFR reference (exact figures
 per function in the table below), and 81 of the 82 entries are faster
-than the scalar loop an untuned caller writes — mean 2.76x on a real
-RVV 1.0 board; the one exception, `erfc`, is 0.77x.
+than the scalar loop an untuned caller writes — mean 3.05x on a real
+RVV 1.0 board; the one exception, `erfc`, is 0.80x.
 
 ## API
 
@@ -135,58 +135,58 @@ hardware (SpaceMiT X60, VLEN 256, 8x1.6 GHz) and under qemu:
 Every one of the 82 entries is within 1 ulp (no lane over 1 ulp, no
 special-class failure, no per-lane flag failure, sweep-stable across
 strip lengths, and identical at every VLEN). 81 of 82 are faster than the
-scalar baseline; the mean is 2.76x. `erfc` is the single exception at
-0.77x (see Known limitations).
+scalar baseline; the mean is 3.05x. `erfc` is the single exception at
+0.80x (see Known limitations).
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrt | 0.5000 | 4.44x | asin | 0.6383 | 1.57x |
-| rsqrt | 0.8612 | 2.97x | acos | 0.6409 | 1.50x |
-| cbrt | 0.6645 | 3.53x | atan | 0.5927 | 1.33x |
-| exp | 0.5030 | 1.89x | atan2 | 0.7242 | 1.36x |
-| exp2 | 0.5038 | 1.63x | asinpi | 1.0000 | 1.50x |
-| exp10 | 0.5034 | 1.90x | acospi | 0.6624 | 1.52x |
+| sqrt | 0.5000 | 4.45x | asin | 0.6383 | 2.10x |
+| rsqrt | 0.8612 | 2.97x | acos | 0.6409 | 1.92x |
+| cbrt | 0.6645 | 3.53x | atan | 0.5927 | 1.32x |
+| exp | 0.5030 | 4.09x | atan2 | 0.7242 | 1.36x |
+| exp2 | 0.5038 | 3.74x | asinpi | 1.0000 | 1.87x |
+| exp10 | 0.5034 | 3.73x | acospi | 0.6624 | 1.75x |
 | expm1 | 0.8130 | 2.01x | atanpi | 1.0000 | 1.29x |
-| log | 0.7290 | 1.42x | atan2pi | 1.0000 | 1.03x |
-| log2 | 0.6888 | 1.21x | sinh | 0.6446 | 2.59x |
-| log10 | 0.9091 | 1.49x | cosh | 0.5645 | 1.77x |
-| log1p | 0.5890 | 1.75x | tanh | 0.5230 | 2.41x |
-| log2p1 | 1.0000 | 1.38x | asinh | 0.9076 | 1.23x |
-| pow | 0.5053 | 2.40x | acosh | 0.9352 | 1.43x |
-| sin | 0.7852 | 2.03x | atanh | 0.9885 | 1.99x |
-| cos | 0.7846 | 1.93x | hypot | 0.5000 | 1.94x |
-| tan | 0.7376 | 1.79x | erf | 1.0000 | 1.06x |
-| sincos | 0.8345 | 2.36x | erfc | 0.9272 | 0.77x |
-| sinpi | 1.0000 | 2.70x | tgamma | 1.0000 | 2.99x |
-| cospi | 0.8067 | 2.52x | lgamma | 0.8505 | 1.22x |
-| tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.20x |
-| sincospi | 1.0000 | 3.82x |  |  |  |
+| log | 0.7290 | 2.23x | atan2pi | 1.0000 | 1.10x |
+| log2 | 0.6888 | 1.78x | sinh | 0.6446 | 4.18x |
+| log10 | 0.9091 | 2.83x | cosh | 0.5645 | 2.97x |
+| log1p | 0.5890 | 2.12x | tanh | 0.5230 | 3.45x |
+| log2p1 | 1.0000 | 1.38x | asinh | 0.9076 | 1.68x |
+| pow | 0.5053 | 3.48x | acosh | 0.9352 | 1.65x |
+| sin | 0.7852 | 2.72x | atanh | 0.9885 | 2.37x |
+| cos | 0.7846 | 2.55x | hypot | 0.5000 | 2.40x |
+| tan | 0.7376 | 2.35x | erf | 1.0000 | 1.06x |
+| sincos | 0.8345 | 3.69x | erfc | 0.9272 | 0.80x |
+| sinpi | 1.0000 | 2.72x | tgamma | 1.0000 | 2.59x |
+| cospi | 0.8067 | 2.50x | lgamma | 0.8505 | 1.25x |
+| tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.24x |
+| sincospi | 1.0000 | 3.72x |  | |  |
 
 The binary32 entries:
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrtf | 0.5000 | 7.03x | asinf | 0.8136 | 3.33x |
-| rsqrtf | 0.5000 | 2.15x | acosf | 0.8893 | 4.21x |
+| sqrtf | 0.5000 | 7.05x | asinf | 0.8136 | 3.33x |
+| rsqrtf | 0.5000 | 2.16x | acosf | 0.8893 | 4.30x |
 | cbrtf | 0.5000 | 1.46x | atanf | 0.8238 | 4.52x |
-| expf | 0.5257 | 6.26x | atan2f | 0.5000 | 1.47x |
-| exp2f | 0.5000 | 2.17x | asinpif | 0.8055 | 3.46x |
-| exp10f | 0.5000 | 2.18x | acospif | 0.5000 | 1.49x |
-| expm1f | 0.6321 | 4.82x | atanpif | 0.8251 | 5.08x |
-| logf | 0.5106 | 2.89x | atan2pif | 0.5000 | 1.75x |
-| log2f | 0.5340 | 2.83x | sinhf | 0.6741 | 5.83x |
-| log10f | 0.5279 | 5.43x | coshf | 0.5365 | 6.34x |
-| log1pf | 0.5796 | 3.40x | tanhf | 0.6855 | 3.21x |
-| log2p1f | 0.5523 | 2.28x | asinhf | 0.5238 | 2.85x |
-| powf | 0.5000 | 1.57x | acoshf | 0.5055 | 3.80x |
-| sinf | 0.5812 | 2.61x | atanhf | 0.5362 | 4.40x |
-| cosf | 0.5812 | 2.82x | hypotf | 0.5000 | 4.09x |
-| tanf | 0.6537 | 3.73x | erff | 0.5005 | 1.52x |
-| sincosf | 0.5916 | 4.67x | erfcf | 0.5312 | 1.67x |
-| sinpif | 0.5802 | 3.05x | tgammaf | 0.5002 | 6.74x |
-| cospif | 0.5627 | 2.44x | lgammaf | 0.5011 | 4.78x |
-| tanpif | 0.6965 | 3.72x | lgamma_rf | 0.5011 | 3.96x |
-| sincospif | 0.6040 | 4.58x |  |  |  |
+| expf | 0.5257 | 6.28x | atan2f | 0.5000 | 1.47x |
+| exp2f | 0.5000 | 3.44x | asinpif | 0.8055 | 3.46x |
+| exp10f | 0.5000 | 3.50x | acospif | 0.5000 | 1.45x |
+| expm1f | 0.6321 | 4.78x | atanpif | 0.8251 | 5.09x |
+| logf | 0.5106 | 2.90x | atan2pif | 0.5000 | 1.81x |
+| log2f | 0.5340 | 2.85x | sinhf | 0.6741 | 5.79x |
+| log10f | 0.5279 | 5.41x | coshf | 0.5365 | 6.34x |
+| log1pf | 0.5796 | 3.41x | tanhf | 0.6855 | 3.21x |
+| log2p1f | 0.5523 | 2.27x | asinhf | 0.5238 | 2.84x |
+| powf | 0.5000 | 2.29x | acoshf | 0.5055 | 3.80x |
+| sinf | 0.5812 | 3.05x | atanhf | 0.5362 | 4.46x |
+| cosf | 0.5812 | 3.08x | hypotf | 0.5000 | 4.15x |
+| tanf | 0.6537 | 3.65x | erff | 0.5005 | 1.52x |
+| sincosf | 0.5916 | 4.32x | erfcf | 0.5312 | 1.67x |
+| sinpif | 0.5802 | 3.12x | tgammaf | 0.5002 | 6.73x |
+| cospif | 0.5627 | 2.44x | lgammaf | 0.5011 | 4.80x |
+| tanpif | 0.6965 | 3.73x | lgamma_rf | 0.5011 | 3.92x |
+| sincospif | 0.6040 | 4.54x |  | |  |
 
 Starred entries reach exactly 1.0 ulp, which the contract admits: they
 round twice, once at 53-bit precision in a scaled domain and then onto
@@ -210,7 +210,16 @@ lanes), or they are `exp` of a very large `lgamma` (`tgamma`).
 * The rare-lane scalar fixup epilogue is out of line: its 4.8 KB of stack
   buffers used to be charged to every strip of every kernel, which cost
   30-45% of hot-loop throughput on this core (that single change took
-  `log2p1` from 0.99x to 1.38x).
+  `log2p1` from 0.99x to 1.38x, and it is what the `exp` family's
+  3.5-4.1x depends on).
+* The *call* to that epilogue is guarded by a `vfirst` at the call site.
+  Passing vector groups by value makes the caller spill its live vector
+  registers and build a frame on every strip, even with an empty mask --
+  worth 0.3-2.1x per entry once removed (`exp` 1.8 -> 4.1x,
+  `exp10` 1.9 -> 3.7x, `sinh` 2.6 -> 4.2x, `log` 1.4 -> 2.2x,
+  `log10` 1.5 -> 2.8x, `pow` 2.4 -> 3.4x, `sincos` 2.4 -> 3.7x).
+  Both effects together are the single largest source of the 2.76x ->
+  3.05x step over the first optimization pass.
 * `log2p1` is built as `log2(RN(1+x)) + c/(u ln2)` on the log2 core's dd
   pair, so the 1/ln2 scaling costs no extra rounding; its hot path is a
   leaf with the fixup behind a `vfirst` branch.
