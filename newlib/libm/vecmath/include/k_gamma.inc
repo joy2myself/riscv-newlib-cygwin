@@ -234,7 +234,7 @@ static const double vm_gam_expP[15][2] = {
 		 VM_VFMV_V_F (0.0, (vl)), (vl));			\
       vglg_tl = VM_VFADD_VV (vglg_tl, vglg_ll, (vl));			\
       VM_DD_ADD (vglg_th, vglg_tl, vglg_th, vglg_tl, vglg_sh, vglg_sl, (vl)); \
-      (yh) = VM_VFMERGE_VVM (vglg_th, VM_KFN (scalar_fixup) ((x),	\
+      (yh) = VM_VFMERGE_VVM (vglg_th, VM_FIXUP1 ((x),	\
 	       vglg_th, vglg_mspec, (vl), (fixup)), vglg_mspec, (vl));	\
       (yl) = VM_VFMERGE_VFM (vglg_tl, 0.0, vglg_mspec, (vl));		\
     }									\
@@ -272,7 +272,7 @@ static const double vm_gam_expP[15][2] = {
     VM_DD_MUL (vgex_ph, vgex_pl, vgex_ph, vgex_pl, vgex_sc,		\
 	       VM_VFMV_V_F (0.0, (vl)), (vl));				\
   }									\
-  (eh) = VM_VFMERGE_VVM (vgex_ph, VM_KFN (scalar_fixup) ((x), (eh),	\
+  (eh) = VM_VFMERGE_VVM (vgex_ph, VM_FIXUP1 ((x), (eh),	\
 	 vgex_mspec, (vl), (fixup)), vgex_mspec, (vl));			\
   (el) = VM_VFMERGE_VFM (vgex_pl, 0.0, vgex_mspec, (vl));		\
 } while (0)
@@ -688,7 +688,7 @@ static const double vm_gam_expP[15][2] = {
 			vgm_mnan, (vl));				\
   (l) = VM_VFMERGE_VFM ((l), 0.0, vgm_mnan, (vl));			\
   /* the poles and the overflow: the scalar owns the value and the flags */ \
-  (h) = VM_KFN (scalar_fixup) ((x), (h), vgm_mfix, (vl), lgamma);	\
+  (h) = VM_FIXUP1 ((x), (h), vgm_mfix, (vl), lgamma);	\
   (l) = VM_VFMERGE_VFM ((l), 0.0, vgm_mfix, (vl));			\
 } while (0)
 

@@ -153,5 +153,5 @@ VM_KFN (hypot2) (vm_f_t x, vm_f_t y, size_t vl,
       }
   }
   r = VM_VFMERGE_VVM (r, a, mfar, vl);
-  return VM_KFN (scalar_fixup2) (x, y, r, mguard, vl, fixup);
+  return VM_FIXUP2 (x, y, r, mguard, vl, fixup);
 }

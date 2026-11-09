@@ -130,6 +130,6 @@ VM_KFN (pow_k) (vm_f_t x, vm_f_t y, size_t vl,
     /* guard lanes (|ehi| >= 512: pow's overflow/underflow tails) go to
        the scalar fixup together with the input-guard lanes.  */
     m_spec = VM_VMOR_MM (m_spec, m_eg, vl);
-    return VM_KFN (scalar_fixup2) (x, y, res, m_spec, vl, fixup);
+    return VM_FIXUP2 (x, y, res, m_spec, vl, fixup);
   }
 }

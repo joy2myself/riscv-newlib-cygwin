@@ -510,7 +510,7 @@ VM_KFN (sin) (vm_f_t x, size_t vl)
   y = VM_VFMERGE_VVM (y, c, VM_VMSEQ_VX (q, 1, vl), vl);
   y = VM_VFMERGE_VVM (y, VM_VFNEG_V (s, vl), VM_VMSEQ_VX (q, 2, vl), vl);
   y = VM_VFMERGE_VVM (y, VM_VFNEG_V (c, vl), VM_VMSEQ_VX (q, 3, vl), vl);
-  return VM_KFN (scalar_fixup) (x, y, m_big, vl, sin);
+  return VM_FIXUP1 (x, y, m_big, vl, sin);
 }
 
 static inline vm_f_t
@@ -528,7 +528,7 @@ VM_KFN (cos) (vm_f_t x, size_t vl)
   y = VM_VFMERGE_VVM (y, VM_VFNEG_V (s, vl), VM_VMSEQ_VX (q, 1, vl), vl);
   y = VM_VFMERGE_VVM (y, VM_VFNEG_V (c, vl), VM_VMSEQ_VX (q, 2, vl), vl);
   y = VM_VFMERGE_VVM (y, s, VM_VMSEQ_VX (q, 3, vl), vl);
-  return VM_KFN (scalar_fixup) (x, y, m_big, vl, cos);
+  return VM_FIXUP1 (x, y, m_big, vl, cos);
 }
 
 static inline vm_f_t
@@ -542,7 +542,7 @@ VM_KFN (tan) (vm_f_t x, size_t vl)
   vm_b_t m_odd = VM_VMSNE_VX (q, 0, vl);
   vm_i64_t iy = VM_REINT_U_I (VM_VMERGE_VXM (VM_VMV_V_X (1, vl), -1,
 					     m_odd, vl));
-  return VM_KFN (scalar_fixup) (x, VM_KFN (ktan) (y0, y1, iy, vl),
+  return VM_FIXUP1 (x, VM_KFN (ktan) (y0, y1, iy, vl),
 				m_big, vl, tan);
 }
 
@@ -566,7 +566,7 @@ VM_KFN (tan) (vm_f_t x, size_t vl)
     vmsc__cn = VM_VFMERGE_VVM (vmsc__cn, VM_VFNEG_V (vmsc__s, (vl)), VM_VMSEQ_VX (vmsc__q, 1, (vl)), (vl)); \
     vmsc__cn = VM_VFMERGE_VVM (vmsc__cn, VM_VFNEG_V (vmsc__c, (vl)), VM_VMSEQ_VX (vmsc__q, 2, (vl)), (vl)); \
     vmsc__cn = VM_VFMERGE_VVM (vmsc__cn, vmsc__s, VM_VMSEQ_VX (vmsc__q, 3, (vl)), (vl)); \
-    (sy) = VM_KFN (scalar_fixup) ((x), vmsc__sn, vmsc__mbig, (vl), sin); \
-    (cy) = VM_KFN (scalar_fixup) ((x), vmsc__cn, vmsc__mbig, (vl), cos); \
+    (sy) = VM_FIXUP1 ((x), vmsc__sn, vmsc__mbig, (vl), sin); \
+    (cy) = VM_FIXUP1 ((x), vmsc__cn, vmsc__mbig, (vl), cos); \
   }									\
 } while (0)

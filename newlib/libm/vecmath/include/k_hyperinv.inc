@@ -121,7 +121,7 @@
   vm_f_t vmlg__l = VM_VFMERGE_VVM (vmlg__el, vmlg__dl, vmlg__mnear, (vl)); \
   vm_f_t vmlg__yc;							\
   VM_DD_COLLAPSE (vmlg__yc, vmlg__h, vmlg__l, (vl));			\
-  (yh) = VM_KFN (scalar_fixup) ((x), vmlg__yc, vmlg__mspec, (vl), (fixup)); \
+  (yh) = VM_FIXUP1 ((x), vmlg__yc, vmlg__mspec, (vl), (fixup)); \
   (yl) = VM_VFMERGE_VFM (vmlg__l, 0.0, vmlg__mspec, (vl));		\
 } while (0)
 

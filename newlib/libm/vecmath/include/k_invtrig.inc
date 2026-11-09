@@ -721,7 +721,13 @@ VM_KFN (atan2pi) (vm_f_t y, vm_f_t x, size_t vl)
   yr = VM_VFMERGE_VVM (yr, VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, (vl)), y, (vl)), \
 		       VM_VMFEQ_VF (yr, 0.0, (vl)), (vl));
   /* adversarial subnormal-quotient lanes: exact scalar reconstruction */
-  return VM_KFN (scalar_fixup2) (y, x, yr, msc, vl, atan2pi_msc);
+  /* The rare-lane rescue is out of line, so enter it only when a lane
+     actually needs it: an unconditional call spills the live vector
+     groups and costs ~40 ns/element on this core even when the mask is
+     empty.  */
+  if (VM_VFIRST_M (msc, vl) < 0)
+    return yr;
+  return VM_FIXUP2 (y, x, yr, msc, vl, atan2pi_msc);
 }
 
 static inline vm_f_t
@@ -735,7 +741,7 @@ VM_KFN (asin) (vm_f_t x, size_t vl)
   VM_INVTRIG_COLLAPSE (y, yh, yl, vl);
   /* asin(+-0) = +-0 (the collapse folds -0).  */
   y = VM_VFMERGE_VVM (y, x, VM_VMFEQ_VF (x, 0.0, vl), vl);
-  return VM_KFN (scalar_fixup) (x, y, mspec, vl, asin);
+  return VM_FIXUP1 (x, y, mspec, vl, asin);
 }
 
 static inline vm_f_t
@@ -747,7 +753,7 @@ VM_KFN (acos) (vm_f_t x, size_t vl)
   vm_f_t yh, yl, y;
   VM_ACOS_DD (yh, yl, xs, vl);
   VM_INVTRIG_COLLAPSE (y, yh, yl, vl);
-  return VM_KFN (scalar_fixup) (x, y, mspec, vl, acos);
+  return VM_FIXUP1 (x, y, mspec, vl, acos);
 }
 
 static inline vm_f_t
@@ -762,7 +768,7 @@ VM_KFN (asinpi) (vm_f_t x, size_t vl)
   y = VM_VFMERGE_VVM (y, VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, (vl)), x, (vl)), \
 		      VM_VMFEQ_VF (x, 0.0, (vl)), (vl));
   /* scalar fixup supplies asinpi() for |x| >= 1 and non-finite.  */
-  return VM_KFN (scalar_fixup) (x, y, mspec, vl, asinpi);
+  return VM_FIXUP1 (x, y, mspec, vl, asinpi);
 }
 
 static inline vm_f_t
@@ -774,5 +780,5 @@ VM_KFN (acospi) (vm_f_t x, size_t vl)
   vm_f_t yh, yl, y;
   VM_ACOS_DD (yh, yl, xs, vl);
   VM_MUL_INVPI_DD (y, yh, yl, vl);
-  return VM_KFN (scalar_fixup) (x, y, mspec, vl, acospi);
+  return VM_FIXUP1 (x, y, mspec, vl, acospi);
 }

@@ -125,7 +125,7 @@
   vm_f_t vmlgd__l = VM_VFMERGE_VVM (vmlgd__el, vmlgd__dl, vmlgd__mnear, (vl)); \
   vm_f_t vmlgd__yc;							\
   VM_DD_COLLAPSE (vmlgd__yc, vmlgd__h, vmlgd__l, (vl));			\
-  (yh) = VM_KFN (scalar_fixup) ((x), vmlgd__yc, vmlgd__mspec, (vl), (fixup)); \
+  (yh) = VM_FIXUP1 ((x), vmlgd__yc, vmlgd__mspec, (vl), (fixup)); \
   (yl) = VM_VFMERGE_VFM (vmlgd__l, 0.0, vmlgd__mspec, (vl));		\
 } while (0)
 
@@ -243,7 +243,7 @@ VM_KFN (log_k) (vm_f_t x, size_t vl, double (*fixup) (double))
   vm_b_t mspec;
   VM_LOG_PLAIN (yh, yl, mspec, x, vl);
   y = VM_VFADD_VV (yh, yl, (vl));
-  return VM_KFN (scalar_fixup) (x, y, mspec, vl, fixup);
+  return VM_FIXUP1 (x, y, mspec, vl, fixup);
 }
 
 /* ------------------------------------------------------------------ */
@@ -471,7 +471,7 @@ VM_KFN (log2_k) (vm_f_t x, size_t vl, double (*fixup) (double))
   vm_u64_t top16 = VM_VSRL_VX (ix, 48, (vl));
   vm_b_t m_spec = VM_VMSGEU_VX (VM_VSUB_VX (top16, 0x10, (vl)), 0x7fe0, (vl));
   VM_LOG2_FD_CORE (yh, yl, x, vl);
-  return VM_KFN (scalar_fixup) (x, VM_VFADD_VV (yh, yl, (vl)), m_spec, vl,
+  return VM_FIXUP1 (x, VM_VFADD_VV (yh, yl, (vl)), m_spec, vl,
 				fixup);
 }
 
@@ -697,7 +697,7 @@ VM_KFN (log1p_poly) (vm_f_t z, size_t vl)
   vm_b_t vmlp__z0 = VM_VMAND_MM (VM_VMFEQ_VF (vmlp__rh, 0.0, (vl)),	\
 				 VM_VMFEQ_VF (vmlp__rl, 0.0, (vl)), (vl)); \
   vmlp__yc = VM_VFMERGE_VVM (vmlp__yc, vmlp__rh, vmlp__z0, (vl));	\
-  vmlp__yc = VM_KFN (scalar_fixup) ((x), vmlp__yc, vmlp__dom, (vl), (fixup)); \
+  vmlp__yc = VM_FIXUP1 ((x), vmlp__yc, vmlp__dom, (vl), (fixup)); \
   (yh) = vmlp__yc;							\
   (yl) = VM_VFMERGE_VFM (vmlp__rl, 0.0, vmlp__dom, (vl));		\
 } while (0)
@@ -836,7 +836,7 @@ VM_KFN (log1p_k) (vm_f_t x, size_t vl, double (*fixup) (double))
   VM_DD_COLLAPSE (y, yh, yl, vl);
   /* log1p(+-0) = +-0.  */
   y = VM_VFMERGE_VVM (y, x, VM_VMFEQ_VF (x, 0.0, vl), vl);
-  return VM_KFN (scalar_fixup) (x, y, m_spec, vl, fixup);
+  return VM_FIXUP1 (x, y, m_spec, vl, fixup);
 }
 
 /* Multiply the dd (ah, al) by the dd constant (ch, cl) -- 1/ln2 here --
@@ -914,7 +914,7 @@ __attribute__ ((noinline)) static vm_f_t
 VM_KFN (log2p1_fixup) (vm_f_t x, vm_f_t y, vm_b_t m, size_t vl,
 		       double (*fn) (double))
 {
-  return VM_KFN (scalar_fixup) (x, y, m, vl, fn);
+  return VM_FIXUP1 (x, y, m, vl, fn);
 }
 
 /* Scalar log2p1 for the fixup lanes: log2(1+x) agrees with log2p1 on
