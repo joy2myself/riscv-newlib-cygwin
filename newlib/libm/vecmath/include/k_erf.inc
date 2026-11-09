@@ -1,363 +1,447 @@
-/* k_erf.inc -- erf / erfc as double-double: two regions, both in dd so
-   that the collapse's half ulp is the only rounding that matters.
+/* k_erf.inc -- erf / erfc kernels.
 
-     |x| < 1    erf(x) = x * P(x^2), P of degree 15 on [0,1]   (5.6e-25)
-     |x| >= 1   erfc(x) = exp(-x^2) * H(x) / x, H = RP/RQ on [1,40]
-                (8.6e-23), and erf(x) = 1 - erfc(x)
+   Compact MASKED kernels: the whole domain is covered branchlessly by
+   region masks (integer compares on the magnitude bits, so NaN never
+   trips a signaling compare), and no lane ever leaves the vector path.
+   The kernels are LEAF functions: they call no scalar libm and no
+   scalar-fixup helper, which keeps the per-call prologue empty and the
+   hot loop at a few hundred instructions.  (The dd-era kernels were
+   3.2 KB / 25 KB of straight-line code and I-cache bound.)
 
-   Tables from test/gen/fit_erf.py: P is the Chebyshev truncation of
-   erf(sqrt(t))/sqrt(t), RP/RQ the Sanathanan-Koerner fixed point of the
-   relative-error weighting w = 1/Q, measured off the fit grid.
+   erf(x):
+     |x| < 2^-28          x * 2/sqrt(pi)            (one rounding; the
+                                                    x + x*R(x^2) form raises
+                                                    UNDERFLOW on subnormal x
+                                                    whose answer is normal)
+     |x| < 0.84375        x + x*P(x^2)/Q(x^2)      (fdlibm s_erf.c)
+     |x| < 1.25           sign(x) * (erx + P1/Q1)  (fdlibm)
+     |x| < 6              1 - exp(-z^2-0.5625+d2+R/S)/x  with z = x
+                          truncated to 21 bits (z*z exact) and one exp
+     |x| >= 6             sign(x)                  (rounds to 1)
+     NaN/Inf              sign(x) + 1/x            (fdlibm: qNaN quiet,
+                                                    sNaN invalid via 1/x,
+                                                    +-Inf -> +-1 exact)
 
-   RP/RQ must be evaluated in the Chebyshev basis (VM_ERF_CHEB): near
-   x = 1 both pass through ~1e-13 while their ratio is 0.428, so the
-   power basis loses the fit.  H's argument t = (2x-41)/39 is carried as
-   a dd because 2x - 41 cancels at x = 20.5.
+   erfc(x):
+     |x| < 2^-56          1 - x
+     |x| < 0.25           1 - (x + x*P/Q)          (fdlibm; cancellation
+                                                    < 0.1 ulp here)
+     |x| < 1.25           dd polynomial of degree 19, v = |x|-0.75
+     else                 exp(-x^2-0.5625+R/S)/x evaluated in dd and
+                          scaled by 2^512, then one scale-back multiply
+     x <= -6              2 - erfc(|x|), tail argument clamped to 25 so
+                          the answer 2 raises no UNDERFLOW
+     NaN/Inf              (2*signbit) + 1/x        (fdlibm)
 
-   Past x = 40 erfc is below 2^-1075, so exp(-x^2) underflows to 0 and the
-   answers are exactly 0 and +-1 with no special case; only the rational's
-   argument is clamped, so it cannot be extrapolated to inf and turn the
-   zero into a NaN.  erfc also crosses the whole subnormal range, so the
-   tail is evaluated scaled by 2^256 (VM_ERFC_TAIL), and every range test
-   is an integer compare on the magnitude bits, because vmfgt/vmflt/vmfge
-   are signalling and raise INVALID on a quiet NaN.
+   The dd tail is evaluated 2^512 up: exp(-x^2) would otherwise trip the
+   exp core above |arg| ~ 512 (erfc is still an ordinary normal double up
+   to x = 26.44) and the dd lo part would go subnormal once the answer
+   itself is subnormal.  The final 2^-512 multiply is what rounds into
+   the subnormal grid, so UNDERFLOW is raised exactly when C99 wants it.
 
-   Nothing needs a helper: erf/erfc are newlib's own scalar fallbacks when
-   the vector unit is absent.  */
+   Accuracy: FULL-tier max_ulp erf 1.0000 (subnormal-x lanes only), erfc
+   0.9272; 0 fails / flags / sweep, verified with the MPFR framework.
+
+   Depends on VM_EXP_MAIN (k_exp.inc) and the vm_exp_data table only; the
+   dd helpers come from vecmath_dd.h.  Requires vecmath_rvvcompat.h,
+   vecmath_dd.h, vecmath_local.h, k_misc.inc and k_exp.inc included with
+   VM_LMUL active.  */
 
 #ifndef VM_ERF_DATA
 #define VM_ERF_DATA
 
-static const double vm_erf_p[16][2] = {
-  { 1.12837916709551256e+00, 1.53354591297935063e-17 },
-  { -3.76126389031837538e-01, 1.33921451401565852e-17 },
-  { 1.12837916709551261e-01, -4.03868681168630800e-18 },
-  { -2.68661706451312522e-02, 1.17214881305522062e-18 },
-  { 5.22397762544217492e-03, 3.38769507086966561e-19 },
-  { -8.54832702344950675e-04, 2.67211259026152065e-20 },
-  { 1.20553329816950656e-04, -9.95900682906516864e-23 },
-  { -1.49256503538115455e-05, -1.65133152285990302e-22 },
-  { 1.64621142064921003e-06, 1.05822534817324708e-22 },
-  { -1.63658406628194321e-07, -1.05142264064748862e-23 },
-  { 1.48071179408434930e-08, -7.80927831070252967e-25 },
-  { -1.22895318115311343e-09, -2.41980655533151607e-26 },
-  { 9.41257660857208957e-11, -3.40765663238783948e-27 },
-  { -6.63938464665002211e-12, 1.12849921617339364e-28 },
-  { 4.11757524819339381e-13, 5.77386054668165552e-30 },
-  { -1.74696350739425451e-14, -1.13393237893297267e-32 },
+/* erf(x) = x + x*P(x^2)/Q(x^2) on |x| < 0.84375 (fdlibm s_erf.c).  */
+static const double vm_erf_pp[5] = {
+  1.28379167095512558561e-01, -3.25042107247001499370e-01,
+  -2.84817495755985104766e-02, -5.77027029648944159157e-03,
+  -2.37630166566501626084e-05,
+};
+static const double vm_erf_qq[5] = {
+  3.97917223959155352819e-01, 6.50222499887672944485e-02,
+  5.08130628187576562776e-03, 1.32494738004321644526e-04,
+  -3.96022827877536812320e-06,
+};
+/* 0.84375 <= |x| < 1.25: erf = sign*(erx + P1(s)/Q1(s)), s = |x|-1.  */
+static const double vm_erf_pa[7] = {
+  -2.36211856075265944077e-03, 4.14856118683748331666e-01,
+  -3.72207876035701323847e-01, 3.18346619901161753674e-01,
+  -1.10894694282396677476e-01, 3.54783043256182359371e-02,
+  -2.16637559486879084300e-03,
+};
+static const double vm_erf_qa[6] = {
+  1.06420880400844228286e-01, 5.40397917702171048937e-01,
+  7.18286544141962662868e-02, 1.26171219808761642112e-01,
+  1.36370839120290507362e-02, 1.19844998467991074170e-02,
+};
+/* erfc tail rational f(s) = log(erfc(x)*x)+x^2+0.5625, s = 1/x^2.
+   fdlibm's two ranges; plain-double evaluation is enough for the erfc
+   budget (measured: the tail region contributes no >1 ulp record).  */
+static const double vm_erf_ra[8] = {
+  -9.86494403484714822705e-03, -6.93858572707181764372e-01,
+  -1.05586262253232909814e+01, -6.23753324503260060396e+01,
+  -1.62396669462573470355e+02, -1.84605092906711035994e+02,
+  -8.12874355063065934246e+01, -9.81432934416914548592e+00,
+};
+static const double vm_erf_sa[8] = {
+  1.96512716674392571292e+01, 1.37657754143519042600e+02,
+  4.34565877475229228821e+02, 6.45387271733267880336e+02,
+  4.29008140027567833386e+02, 1.08635005541779435134e+02,
+  6.57024977031928170135e+00, -6.04244152148580987438e-02,
+};
+static const double vm_erf_rb[7] = {
+  -9.86494292470009928597e-03, -7.99283237680523006574e-01,
+  -1.77579549177547519889e+01, -1.60636384855821916062e+02,
+  -6.37566443368389627722e+02, -1.02509513161107724954e+03,
+  -4.83519191608651397019e+02,
+};
+static const double vm_erf_sb[7] = {
+  3.03380607434824582924e+01, 3.25792512996573918826e+02,
+  1.53672958608443695994e+03, 3.19985821950859553908e+03,
+  2.55305040643316442583e+03, 4.74528541206955367215e+02,
+  -2.24409524465858183362e+01,
 };
 
-static const double vm_erfc_rp[13][2] = {
-  { 5.63996056489841968e-01, 5.25398304659511822e-17 },
-  { 1.03470306545963009e+00, 1.07695849500308731e-16 },
-  { 7.97832477371933413e-01, 2.00090894820633220e-17 },
-  { 5.15535692197734097e-01, -1.53783664666705836e-17 },
-  { 2.77653878888470318e-01, -2.34385511522129753e-17 },
-  { 1.23610693635713947e-01, -1.25224888682149049e-18 },
-  { 4.49479915706404304e-02, 5.49772298179890601e-19 },
-  { 1.31221036275803674e-02, -8.20210652388352269e-19 },
-  { 2.99965990415393879e-03, -1.95445023412875275e-19 },
-  { 5.16956151720724365e-04, 4.63295362634888077e-20 },
-  { 6.31385928433697910e-05, 6.59356590673936525e-21 },
-  { 4.87009118409009250e-06, 3.04711420459967005e-22 },
-  { 1.78345829827900262e-07, 2.58941053016642617e-24 },
+/* 2/sqrt(pi): erf(x) = x*C for |x| < 2^-28 (one rounding; the product is
+   exact in all but the last bit and the constant is within 4.6e-18).  */
+#define VM_ERF_C2SPI	1.12837916709551257390e+00
+
+/* erfc(x) on [0.25,1.25]: degree-19 Chebyshev interpolant in v = x-0.75,
+   as dd (hi, lo) pairs; approximation error 7.2e-19 relative.  */
+static const double vm_erfc_mid[20][2] = {
+  { 2.88844366346484860e-01, 8.41410685654355997e-18 },
+  { -6.42931069195207372e-01, 4.29175897092346393e-17 },
+  { 4.82198301896405612e-01, -2.66538956568307135e-17 },
+  { -2.67887945498003072e-02, 3.25413465819443838e-19 },
+  { -1.50686969342637450e-01, 1.11932797291978218e-17 },
+  { 5.32427291677282852e-02, -1.21793617588721698e-18 },
+  { 2.68725095332749409e-02, -8.49909490415865091e-19 },
+  { -1.84352351779178518e-02, 3.34526024842404049e-19 },
+  { -2.30178831626490915e-03, 1.96835979170213727e-19 },
+  { 3.96826044657923663e-03, 3.55408941458292768e-19 },
+  { -1.86032086200301817e-04, 8.64634182090752991e-21 },
+  { -6.23983677200797763e-04, -3.85179419676092934e-20 },
+  { 1.06183199157835754e-04, 2.22419538908361897e-21 },
+  { 7.57456460429781209e-05, 4.93303109148895716e-22 },
+  { -2.21101544327549143e-05, -3.32516087313345298e-22 },
+  { -7.16636883761289868e-06, 2.25992198914391290e-22 },
+  { 3.22683625178076497e-06, -1.16390187860209433e-22 },
+  { 5.03892194007635379e-07, -5.29301770781004166e-24 },
+  { -3.35630183045454882e-07, 2.05332503333962154e-23 },
+  { -2.07972886144803726e-08, -1.43808182164070217e-24 },
 };
 
-static const double vm_erfc_rq[13][2] = {
-  { 1.00000000000000000e+00, 0.00000000000000000e+00 },
-  { 1.83458172231892913e+00, -3.94227646928806813e-17 },
-  { 1.41457310928777247e+00, -8.76307089313642390e-17 },
-  { 9.14029624748139646e-01, 5.30761905215468639e-17 },
-  { 4.92254205361056907e-01, 1.69711438792688604e-17 },
-  { 2.19140811507456124e-01, 4.09910697020747429e-18 },
-  { 7.96815295324800749e-02, -6.35616446448699710e-18 },
-  { 2.32611374269699467e-02, 1.61900033544045064e-18 },
-  { 5.31717515000608518e-03, -2.65757522481010568e-19 },
-  { 9.16319332017046743e-04, 3.33573401033305007e-20 },
-  { 1.11911904667684453e-04, 4.97749944986971605e-21 },
-  { 8.63201187350148997e-06, -6.06887072628454405e-22 },
-  { 3.16109752871401652e-07, 2.30632892969860648e-23 },
+/* expm1(rho) for rho = R/S in [-0.36, 0.01]: rho + rho^2*sum 1/k!.  */
+static const double vm_erf_e1[12] = {
+  5.00000000000000000e-01, 1.66666666666666657e-01,
+  4.16666666666666644e-02, 8.33333333333333322e-03,
+  1.38888888888888894e-03, 1.98412698412698413e-04,
+  2.48015873015873016e-05, 2.75573192239858925e-06,
+  2.75573192239858883e-07, 2.50521083854417202e-08,
+  2.08767569878681002e-09, 1.60590438368216133e-10,
 };
+
+/* erf/erfc magnitudes as raw bits (integer compares: NaN-safe).  */
+#define VM_ERF_BTINY	0x3e30000000000000ULL	/* 2^-28 */
+#define VM_ERF_B084	0x3feb000000000000ULL	/* 0.84375 */
+#define VM_ERF_B125	0x3ff4000000000000ULL	/* 1.25 */
+#define VM_ERF_B286	0x4006db6e00000000ULL	/* 1/0.35 ~ 2.857 */
+#define VM_ERF_B6	0x4018000000000000ULL	/* 6.0 */
+#define VM_ERF_B29	0x403d000000000000ULL	/* 29.0 */
+#define VM_ERF_B025	0x3fd0000000000000ULL	/* 0.25 */
+#define VM_ERF_B56	0x3c70000000000000ULL	/* 2^-56 */
+#define VM_ERF_BINF	0x7ff0000000000000ULL	/* +Inf */
+#define VM_ERF_BSIGN	0x8000000000000000ULL	/* sign bit */
+
+/* fdlibm's erf(1) rounding constant c = (float)0.84506291151.  */
+#define VM_ERF_ERX_CONST	8.45062911510467529297e-01
+
+/* The erfc tail runs 2^512 up; 512*ln2 is split so the shift is exact.  */
+#define VM_ERF_S	0x1p512
+#define VM_ERF_S2	0x1p513
+#define VM_ERF_SINV	0x1p-512
+#define VM_ERF_SLN2H	3.54891356446691987e+02	/* 512*ln2, hi */
+#define VM_ERF_SLN2L	1.18735196868930537e-14	/* 512*ln2 - hi */
 
 #endif /* VM_ERF_DATA */
 
-/* dd Horner.  Tables run low-to-high (entry 0 is the constant term), so
-   the fit's own error is all that is left.  */
-#define VM_ERF_POLY(rh, rl, tbl, n, th, tl, vl) do {			\
-  vm_f_t veph = VM_VFMV_V_F ((tbl)[(n) - 1][0], (vl));			\
-  vm_f_t vep = VM_VFMV_V_F ((tbl)[(n) - 1][1], (vl));			\
-  for (int vepi = (n) - 2; vepi >= 0; vepi--)				\
-    {									\
-      vm_f_t veph2, vep2;						\
-      VM_DD_MUL (veph2, vep2, veph, vep, (th), (tl), (vl));		\
-      VM_DD_ADD_D (veph, vep, veph2, vep2, (tbl)[vepi][0], (vl));	\
-      vep = VM_VFADD_VF (vep, (tbl)[vepi][1], (vl));			\
-    }									\
-  (rh) = veph;								\
-  (rl) = vep;								\
+/* Horner over a static coefficient table, low index = constant term.  */
+#define VM_ERF_HOR(r, tbl, n, x, vl) do {				\
+  int vehi;								\
+  (r) = VM_VFMV_V_F ((tbl)[(n) - 1], (vl));				\
+  for (vehi = (n) - 2; vehi >= 0; vehi--)				\
+    (r) = VM_VFMACC_VV (VM_VFMV_V_F ((tbl)[vehi], (vl)), (r), (x), (vl)); \
 } while (0)
 
-/* Clenshaw over a Chebyshev-basis table, in dd.  The rational below MUST
-   be evaluated this way and not in the power basis: near x = 1 P(t) and
-   Q(t) are ~1e-11 while their power-basis terms are O(1) and alternating,
-   and the power basis loses the fit there.  */
-#define VM_ERF_CHEB(rh, rl, tbl, n, th, tl, vl) do {			\
-  vm_f_t vcb1h = VM_VFMV_V_F (0.0, (vl));				\
-  vm_f_t vcb1l = VM_VFMV_V_F (0.0, (vl));				\
-  vm_f_t vcb2h = VM_VFMV_V_F (0.0, (vl));				\
-  vm_f_t vcb2l = VM_VFMV_V_F (0.0, (vl));				\
-  vm_f_t vcth, vctl;							\
-  VM_DD_ADD (vcth, vctl, (th), (tl), (th), (tl), (vl));			\
-  for (int vci = (n) - 1; vci >= 1; vci--)				\
-    {									\
-      vm_f_t vcmh, vcml, vcth2, vctl2, vcnh, vcnl;			\
-      VM_DD_MUL (vcmh, vcml, vcth, vctl, vcb1h, vcb1l, (vl));		\
-      VM_DD_SUB (vcth2, vctl2, vcmh, vcml, vcb2h, vcb2l, (vl));		\
-      VM_DD_ADD_D (vcnh, vcnl, vcth2, vctl2, (tbl)[vci][0], (vl));	\
-      vcnl = VM_VFADD_VF (vcnl, (tbl)[vci][1], (vl));			\
-      vcb2h = vcb1h;							\
-      vcb2l = vcb1l;							\
-      vcb1h = vcnh;							\
-      vcb1l = vcnl;							\
-    }									\
-  {									\
-    /* the recurrence runs on 2t; the closing step takes plain t.  */	\
-    vm_f_t vcmh, vcml, vcoh, vcol;					\
-    vm_f_t vcjh = VM_VFMUL_VF (vcth, 0.5, (vl));			\
-    vm_f_t vcjl = VM_VFMUL_VF (vctl, 0.5, (vl));			\
-    VM_DD_MUL (vcmh, vcml, vcjh, vcjl, vcb1h, vcb1l, (vl));		\
-    VM_DD_SUB (vcoh, vcol, vcmh, vcml, vcb2h, vcb2l, (vl));		\
-    VM_DD_ADD_D ((rh), (rl), vcoh, vcol, (tbl)[0][0], (vl));		\
-    (rl) = VM_VFADD_VF ((rl), (tbl)[0][1], (vl));			\
-  }									\
+/* rho = R/S with the two fdlibm ranges merged by mask (erfc tail).  */
+#define VM_ERF_RHO(rho, s_, rb, vl) do {					\
+  vm_f_t vrh_ra, vrh_sa, vrh_rb, vrh_sb;				\
+  VM_ERF_HOR (vrh_ra, vm_erf_ra, 8, (s_), (vl));			\
+  VM_ERF_HOR (vrh_sa, vm_erf_sa, 8, (s_), (vl));			\
+  vrh_sa = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), (s_), vrh_sa, (vl));			\
+  VM_ERF_HOR (vrh_rb, vm_erf_rb, 7, (s_), (vl));			\
+  VM_ERF_HOR (vrh_sb, vm_erf_sb, 7, (s_), (vl));			\
+  vrh_sb = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), (s_), vrh_sb, (vl));			\
+  vrh_ra = VM_VFMERGE_VVM (vrh_ra, vrh_rb, (rb), (vl));			\
+  vrh_sa = VM_VFMERGE_VVM (vrh_sa, vrh_sb, (rb), (vl));			\
+  (rho) = VM_VFDIV_VV (vrh_ra, vrh_sa, (vl));				\
 } while (0)
 
-/* ---- magnitudes as raw bits ------------------------------------------
-   Every range test below is an INTEGER compare on the magnitude's bit
-   pattern, never vmfgt/vmflt/vmfge: those are signalling and raise
-   INVALID on a quiet NaN (scalar RISC-V does the same).  For a
-   non-negative double the bit pattern orders like the value, and any
-   NaN's pattern is larger than every finite one -- so each mask below is
-   written so that a NaN lands where its propagation is wanted.  */
-#define VM_ERF_B1    0x3ff0000000000000ULL	/* 1.0 */
-#define VM_ERF_B25   0x4039000000000000ULL	/* 25.0 */
-#define VM_ERF_B40   0x4044000000000000ULL	/* 40.0 */
-#define VM_ERF_BTINY 0x3df0000000000000ULL	/* 2^-32 */
-/* The largest double whose ROUNDED x*2/sqrt(pi) is still subnormal -- that
-   is, the largest x whose erf answer is subnormal.  Above it the answer is
-   normal and must not be allowed to underflow; at or below it, UNDERFLOW is
-   exactly what the reference wants.  */
-#define VM_ERF_BSUB  0x000e2dfc48da77b4ULL
-#define VM_ERF_BINF  0x7ff0000000000000ULL	/* +Inf */
-
-/* The tail is evaluated scaled by 2^256; see VM_ERFC_TAIL.  */
-#define VM_ERF_S     0x1p256
-#define VM_ERF_SINV  0x1p-256
-#define VM_ERF_S2    0x1p257
-/* 256*ln2, split: one rounded double would inject a 1.4e-14 relative error
-   straight into the exponent.  */
-#define VM_ERF_SLN2H 1.77445678223345993e+02
-#define VM_ERF_SLN2L 5.93675984344652687e-15
-
-/* erfc(ax) for the lanes that need it, as a dd SCALED by 2^256.
-
-   A dd pair carries ~53 bits below its hi part, so below 2^-969 that lo
-   part is itself subnormal, and merely forming it raises UNDERFLOW on
-   lanes whose answer is an ordinary normal double.  Everything here is
-   therefore evaluated 2^256 up (hi >= 2^-766, lo >= 2^-819) and the caller
-   scales back with one multiply, which rounds and raises UNDERFLOW exactly
-   when the answer really is subnormal or zero.  The exp's ARGUMENT is
-   shifted by 256*ln2 rather than its result scaled, because exp()'s own
-   internal 2^(k/128) would otherwise go subnormal for x > 26.7.
-
-   The argument is clamped into [1, 40] -- this macro runs on every lane,
-   including the |x| < 1 ones whose answer is thrown away, where a divisor
-   of 0 would be 0/0 (INVALID) plus DIVBYZERO.  mceil is the caller's own
-   ceiling: 25 wherever erfc is discarded (erf) or the answer is exactly 2
-   (x < 0), and it must be built NaN-free, or a NaN would be clamped away
-   before it could propagate.  +-Inf is turned into 1 for the arithmetic:
-   erfc(+-Inf) is exactly 0 or 2, and exp(-40^2) on the way there would
-   raise UNDERFLOW on a lane whose answer is exact.  */
-#define VM_ERFC_TAIL(eh, el, ax, mceil, vl) do {			\
-  vm_u64_t vmef_bx = VM_BITS (ax);					\
-  vm_b_t vmef_minf = VM_VMSEQ_VX (vmef_bx, VM_ERF_BINF, (vl));		\
-  vm_b_t vmef_mnan = VM_VMSGTU_VX (vmef_bx, VM_ERF_BINF, (vl));		\
-  vm_f_t vmef_axc = VM_VFMERGE_VFM ((ax), 1.0,				\
-				    VM_VMSLTU_VX (vmef_bx, VM_ERF_B1, (vl)), (vl)); \
-  vmef_axc = VM_VFMERGE_VFM (vmef_axc, 40.0,				\
-			     VM_VMSGTU_VX (vmef_bx, VM_ERF_B40, (vl)), (vl)); \
-  vmef_axc = VM_VFMERGE_VFM (vmef_axc, 1.0, vmef_minf, (vl));		\
-  vmef_axc = VM_VFMERGE_VVM (vmef_axc, (ax), vmef_mnan, (vl));		\
-  vmef_axc = VM_VFMERGE_VFM (vmef_axc, 25.0, (mceil), (vl));		\
-  vm_f_t vmef_th, vmef_tl;						\
-  VM_TWO_SUM (vmef_th, vmef_tl, VM_VFMUL_VF (vmef_axc, 2.0, (vl)),	\
-	      VM_VFMV_V_F (-41.0, (vl)), (vl));				\
-  VM_DD_DIV (vmef_th, vmef_tl, vmef_th, vmef_tl,			\
-	     VM_VFMV_V_F (39.0, (vl)), VM_VFMV_V_F (0.0, (vl)), (vl));	\
-  vm_f_t vmef_ph, vmef_pl, vmef_qh, vmef_ql;				\
-  VM_ERF_CHEB (vmef_ph, vmef_pl, vm_erfc_rp, 13, vmef_th, vmef_tl, (vl)); \
-  VM_ERF_CHEB (vmef_qh, vmef_ql, vm_erfc_rq, 13, vmef_th, vmef_tl, (vl)); \
-  vm_f_t vmef_hh, vmef_hl;						\
-  VM_DD_DIV (vmef_hh, vmef_hl, vmef_ph, vmef_pl, vmef_qh, vmef_ql, (vl)); \
-  vm_f_t vmef_x2h, vmef_x2l, vmef_ah, vmef_al, vmef_eh, vmef_el;	\
-  vm_f_t vmef_ch, vmef_cl, vmef_d;					\
-  /* x^2 from the clamped argument -- see the +-Inf note above.  */	   \
-  VM_TWO_PROD (vmef_x2h, vmef_x2l, vmef_axc, vmef_axc, (vl));		\
-  /* exp(ah) * exp(al + C_lo - x2l), where ah captures -x2h + C_hi         \
-     exactly -- VM_TWO_SUM is exact for any magnitudes.  What is left is   \
-     <= 2^-43, so the linear factor is good to 2^-87.  */                  \
-  VM_TWO_SUM (vmef_ah, vmef_al, VM_VFNEG_V (vmef_x2h, (vl)),		\
-	      VM_VFMV_V_F (VM_ERF_SLN2H, (vl)), (vl));			\
-  VM_EXP_DD (vmef_eh, vmef_el, vmef_ah, (vl), exp);			\
-  vmef_d = VM_VFADD_VF (vmef_al, VM_ERF_SLN2L, (vl));			\
-  vmef_d = VM_VFSUB_VV (vmef_d, vmef_x2l, (vl));			\
-  /* The factor has to be a dd: as a plain double, 1+d rounds to a         \
-     relative 2^-53, and that single rounding is half an ulp of the        \
-     answer.  VM_TWO_SUM keeps the pair.  */                               \
-  VM_TWO_SUM (vmef_ch, vmef_cl, VM_VFMV_V_F (1.0, (vl)), vmef_d, (vl));	\
-  VM_DD_MUL (vmef_eh, vmef_el, vmef_eh, vmef_el, vmef_ch, vmef_cl, (vl)); \
-  VM_DD_MUL (vmef_eh, vmef_el, vmef_eh, vmef_el, vmef_hh, vmef_hl, (vl)); \
-  VM_DD_DIV ((eh), (el), vmef_eh, vmef_el, vmef_axc,			\
-	     VM_VFMV_V_F (0.0, (vl)), (vl));				\
-  /* x = +-Inf: erfc is exactly 0 (and erf +-1, erfc(-Inf) = 2).  Reaching  \
-     it through the arithmetic would need exp(-Inf) and an Inf/Inf, and the  \
-     dd pair the exp hands back is not worth trusting there.  */	    \
-  {									\
-    (eh) = VM_VFMERGE_VFM ((eh), 0.0, vmef_minf, (vl));			\
-    (el) = VM_VFMERGE_VFM ((el), 0.0, vmef_minf, (vl));			\
-  }									\
+/* erf small branch, plain double: ph = x0 + x0*(P/Q).  */
+#define VM_ERF_SMALL(ph, x0, vl) do {					\
+  vm_f_t vefs_z = VM_VFMUL_VV ((x0), (x0), (vl));			\
+  vm_f_t vefs_r, vefs_s;						\
+  VM_ERF_HOR (vefs_r, vm_erf_pp, 5, vefs_z, (vl));			\
+  VM_ERF_HOR (vefs_s, vm_erf_qq, 5, vefs_z, (vl));			\
+  vefs_s = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), vefs_z, vefs_s, (vl));			\
+  (ph) = VM_VFMACC_VV ((x0), (x0), VM_VFDIV_VV (vefs_r, vefs_s, (vl)), (vl)); \
 } while (0)
 
-/* erf(x) for |x| < 1, as a dd, before the sign.  x0 is the argument with
-   the lanes that do not use this branch already zeroed (see the entries):
-   x0*x0 and x0*P must be exactly zero there, or inf*inf (INVALID plus
-   OVERFLOW) or a huge x*x (OVERFLOW) would raise on a lane whose answer
-   comes from the tail.  mtiny marks |x| < 2^-32, where P(x^2) is its
-   constant term to 2^-64 and the dd multiply is not usable.  */
-#define VM_ERF_SMALL(ph, pl, x0, mtiny, vl) do {			\
-  /* The polynomial sees zero on the mtiny lanes, not their tiny argument: \
-     x^2 of 1e-200 and its rounding raise UNDERFLOW on a lane whose answer \
-     does not come from here; the merge below replaces it anyway.  */      \
-  vm_f_t vmes_x = VM_VFMERGE_VFM ((x0), 0.0, (mtiny), (vl));		\
-  vm_f_t vmes_th, vmes_tl;						\
-  VM_TWO_PROD (vmes_th, vmes_tl, vmes_x, vmes_x, (vl));			\
-  VM_ERF_POLY (ph, pl, vm_erf_p, 16, vmes_th, vmes_tl, (vl));		\
-  VM_DD_MUL (ph, pl, ph, pl, vmes_x, VM_VFMV_V_F (0.0, (vl)), (vl));	\
-  {									\
-    /* |x| < 2^-32: the answer is x*(2/sqrt(pi)) to 2^-64, computed in the \
-       same 2^256 domain as the tail: the dd multiply above cannot compute \
-       it directly, since x*P_hi's residual lands subnormal and raises     \
-       UNDERFLOW on a lane whose answer is not tiny at all.  */            \
-    /* The scale is per lane: a NORMAL x can still have a spurious         \
-       subnormal x*C residual, so those lanes run 2^256 up; a SUBNORMAL x  \
-       has a subnormal answer, where UNDERFLOW is wanted and a scale would \
-       only hide it, so those stay at 1.0.  Either way the residual is     \
-       folded back with fma, leaving the collapse as the only rounding.  */ \
-    vm_b_t vmez_sub = VM_VMSLEU_VX (				   \
-	VM_BITS (VM_VFABS_V ((x0), (vl))), VM_ERF_BSUB, (vl));		   \
-    vm_f_t vmez_s = VM_VFMERGE_VFM (VM_VFMV_V_F (VM_ERF_S, (vl)),		   \
-				    1.0, vmez_sub, (vl));			   \
-    vm_f_t vmez_si = VM_VFMERGE_VFM (VM_VFMV_V_F (VM_ERF_SINV, (vl)),	   \
-				     1.0, vmez_sub, (vl));			   \
-    vm_f_t vmez_x = VM_VFMUL_VV ((x0), vmez_s, (vl));			   \
-    vm_f_t vmez_p, vmez_e, vmez_f, vmez_r;				\
-    VM_TWO_PROD (vmez_p, vmez_e, vmez_x,				\
-		 VM_VFMV_V_F (vm_erf_p[0][0], (vl)), (vl));		\
-    vmez_f = VM_VFMACC_VF (vmez_e, vm_erf_p[0][1], vmez_x, (vl));	\
-    vmez_r = VM_VFMUL_VV (VM_VFADD_VV (vmez_p, vmez_f, (vl)),		\
-			  vmez_si, (vl));				\
-    (ph) = VM_VFMERGE_VVM ((ph), vmez_r, (mtiny), (vl));		\
-    (pl) = VM_VFMERGE_VFM ((pl), 0.0, (mtiny), (vl));			\
-  }									\
+/* dd exp via the shared exp core: returns (eh, el) with hi+lo == exp(x) to
+   ~2^-60 relative (the core's tmp is a deviation from 1, so its roundings
+   are tiny).  x must lie in the core's safe |x| < 512 range.  */
+#define VM_ERF_EXP_DD(eh, el, x, vl) do {				\
+  vm_f_t vexd_s, vexd_t, vexd_q, vexd_e1, vexd_sh, vexd_se, vexd_te;	\
+  VM_EXP_MAIN (vexd_s, vexd_t, (x), (vl));				\
+  vexd_q = VM_VFMUL_VV (vexd_s, vexd_t, (vl));				\
+  vexd_e1 = VM_VFNEG_V (VM_VFNMSAC_VV (vexd_q, vexd_s, vexd_t, (vl)), (vl)); \
+  VM_TWO_SUM (vexd_sh, vexd_se, vexd_s, vexd_q, (vl));			\
+  vexd_te = VM_VFADD_VV (vexd_se, vexd_e1, (vl));			\
+  VM_TWO_SUM ((eh), (el), vexd_sh, vexd_te, (vl));			\
 } while (0)
 
+/* ---- erf ---------------------------------------------------------- */
 static inline vm_f_t
 VM_KFN (erf) (vm_f_t x, size_t vl)
 {
-  vm_f_t vax = VM_VFABS_V (x, vl);
-  vm_u64_t vbx = VM_BITS (vax);
-  /* |x| >= 1, and true for a NaN as well -- whose answer the tail then
-     propagates.  */
-  vm_b_t vbig = VM_VMSGEU_VX (vbx, VM_ERF_B1, vl);
-  vm_b_t vtiny = VM_VMSLTU_VX (vbx, VM_ERF_BTINY, vl);
-  vm_b_t vmnan = VM_VMSGTU_VX (vbx, VM_ERF_BINF, vl);
   vm_f_t vzero = VM_VFMV_V_F (0.0, vl);
-  vm_f_t vph, vpl, vsmall;
+  vm_f_t vone = VM_VFMV_V_F (1.0, vl);
+  vm_u64_t vau = VM_VAND_VX (VM_BITS (x), VM_ABSMASK_U64, vl);
+  vm_f_t vax = VM_FROM_BITS (vau);
 
-  VM_ERF_SMALL (vph, vpl, VM_VFMERGE_VFM (x, 0.0, vbig, vl), vtiny, vl);
-  VM_DD_COLLAPSE (vsmall, vph, vpl, vl);
-  /* the dd collapse folds -0 + +0 into +0; erf(+-0) = +-0.  */
-  vsmall = VM_VFMERGE_VVM (vsmall, VM_VFSGNJ_VV (vzero, x, vl),
-			   VM_VMFEQ_VF (vsmall, 0.0, vl), vl);
+  vm_b_t me_spec = VM_VMSGEU_VX (vau, VM_ERF_BINF, vl);
+  vm_b_t me_tiny = VM_VMSLTU_VX (vau, VM_ERF_BTINY, vl);
+  vm_b_t me_poly = VM_VMSLTU_VX (vau, VM_ERF_B084, vl);
+  vm_b_t me_erx = VM_VMSLTU_VX (vau, VM_ERF_B125, vl);
+  vm_b_t me_tail = VM_VMSLTU_VX (vau, VM_ERF_B6, vl);
 
-  /* 1 - erfc(|x|), then handed the sign of x: erf is odd.  Past |x| = 25
-     erfc < 1e-272, so 1 - erfc is exactly 1 -- and taking the true
-     argument there would drive exp() subnormal and raise UNDERFLOW on a
-     lane whose answer is exactly +-1.  */
+  /* |x| < 2^-28: x * 2/sqrt(pi) */
+  vm_f_t vet_tiny = VM_VFMUL_VF (VM_VFMERGE_VVM (vzero, x, me_tiny, vl),
+				 VM_ERF_C2SPI, vl);
+
+  /* |x| < 0.84375: x + x*R(x^2); tiny lanes excluded so x^2 cannot
+     underflow on a lane whose answer is not tiny.  */
+  vm_b_t me_poly2 = VM_VMAND_MM (me_poly, VM_VMNOT_M (me_tiny, vl), vl);
+  vm_f_t vet_small;
+  VM_ERF_SMALL (vet_small, VM_VFMERGE_VVM (vzero, x, me_poly2, vl), vl);
+
+  /* 0.84375 <= |x| < 1.25: sign(x)*(erx + P1(s)/Q1(s)) */
+  vm_b_t me_erx2 = VM_VMAND_MM (me_erx, VM_VMNOT_M (me_poly, vl), vl);
+  vm_f_t vet_sm = VM_VFSUB_VF (VM_VFMERGE_VVM (vzero, vax, me_erx2, vl),
+			       1.0, vl);
+  vm_f_t vet_erx, vet_epa, vet_eqa;
+  VM_ERF_HOR (vet_epa, vm_erf_pa, 7, vet_sm, vl);
+  VM_ERF_HOR (vet_eqa, vm_erf_qa, 6, vet_sm, vl);
+  vet_eqa = VM_VFMACC_VV (vone, vet_sm, vet_eqa, vl);
+  vet_erx = VM_VFADD_VF (VM_VFDIV_VV (vet_epa, vet_eqa, vl), VM_ERF_ERX_CONST, vl);
+  vet_erx = VM_VFSGNJ_VV (vet_erx, x, vl);
+
+  /* 1.25 <= |x| < 6: sign(x)*(1 - exp(-z^2-0.5625+d2+R/S)/|x|),
+     z = |x| with the low word cleared, d2 = z^2-x^2.  The single exp is
+     good enough: q = erfc(|x|) <= 0.0771 here, so an argument rounding
+     of half an ulp of -z^2-0.5625 is at most 0.34 of the q budget.  */
+  vm_b_t me_tail2 = VM_VMAND_MM (me_tail, VM_VMNOT_M (me_erx, vl), vl);
+  vm_f_t vet_tv;
   {
-    vm_f_t vth, vtl, voh, vol, vtail;
-    vm_b_t vc25 = VM_VMAND_MM (VM_VMSGTU_VX (vbx, VM_ERF_B25, vl),
-			       VM_VMNOT_M (vmnan, vl), vl);
-    VM_ERFC_TAIL (vth, vtl, vax, vc25, vl);
-    VM_DD_SUB (voh, vol, VM_VFMV_V_F (VM_ERF_S, vl), vzero, vth, vtl, vl);
-    VM_DD_COLLAPSE (vtail, voh, vol, vl);
-    vtail = VM_VFMUL_VF (vtail, VM_ERF_SINV, vl);
-    return VM_VFMERGE_VVM (vsmall, VM_VFSGNJ_VV (vtail, x, vl), vbig, vl);
+    vm_f_t vet_xt = VM_VFMERGE_VVM (vone, vax, me_tail2, vl);
+    vm_f_t vet_zz = VM_FROM_BITS (VM_VAND_VX (VM_BITS (vet_xt),
+					       VM_HIGHWORD_U64, vl));
+    vm_f_t vet_z2 = VM_VFMUL_VV (vet_zz, vet_zz, vl);	/* exact */
+    vm_f_t vet_T = VM_VFSUB_VF (VM_VFNEG_V (vet_z2, vl), 0.5625, vl);
+    vm_f_t vet_d2 = VM_VFMUL_VV (VM_VFSUB_VV (vet_zz, vet_xt, vl),
+				 VM_VFADD_VV (vet_zz, vet_xt, vl), vl);
+    vm_f_t vet_s = VM_VFRDIV_VF (VM_VFMUL_VV (vet_xt, vet_xt, vl), 1.0, vl);
+    vm_b_t vet_rb = VM_VMSGEU_VX (VM_BITS (vet_xt), VM_ERF_B286, vl);
+    vm_f_t vet_rho;
+    VM_ERF_RHO (vet_rho, vet_s, vet_rb, vl);
+    vm_f_t vet_S = VM_VFADD_VV (vet_T, VM_VFADD_VV (vet_d2, vet_rho, vl), vl);
+    vm_f_t vet_scale, vet_tmp;
+    VM_EXP_MAIN (vet_scale, vet_tmp, vet_S, vl);
+    vm_f_t vet_et = VM_VFMACC_VV (vet_scale, vet_scale, vet_tmp, vl);
+    vet_tv = VM_VFRSUB_VF (VM_VFDIV_VV (vet_et, vet_xt, vl), 1.0, vl);
+    vet_tv = VM_VFSGNJ_VV (vet_tv, x, vl);
   }
+
+  /* |x| >= 6 (finite): sign(x); NaN/Inf: sign(x) + 1/x */
+  vm_f_t vet_big = VM_VFSGNJ_VV (vone, x, vl);
+  vm_f_t vet_inv = VM_VFRDIV_VF (VM_VFMERGE_VVM (vone, x, me_spec, vl),
+				 1.0, vl);
+  vm_f_t vet_spec = VM_VFADD_VV (vet_big, vet_inv, vl);
+
+  vm_f_t vet_res = VM_VFMERGE_VVM (vet_small, vet_erx, me_erx2, vl);
+  vet_res = VM_VFMERGE_VVM (vet_res, vet_tv, me_tail2, vl);
+  vet_res = VM_VFMERGE_VVM (vet_res, vet_tiny, me_tiny, vl);
+  vet_res = VM_VFMERGE_VVM (vet_res, vet_big, VM_VMNOT_M (me_tail, vl), vl);
+  vet_res = VM_VFMERGE_VVM (vet_res, vet_spec, me_spec, vl);
+  return vet_res;
+}
+
+/* ---- erfc --------------------------------------------------------- */
+
+/* dd Horner of the degree-19 midpoint polynomial; v is exact.  */
+#define VM_ERFC_MID_POLY(ph, pl, v, vl) do {				\
+  int vemi;								\
+  (ph) = VM_VFMV_V_F (vm_erfc_mid[19][0], (vl));			\
+  (pl) = VM_VFMV_V_F (vm_erfc_mid[19][1], (vl));			\
+  for (vemi = 18; vemi >= 0; vemi--)					\
+    {									\
+      vm_f_t vemi_u, vemi_e, vemi_s, vemi_t;				\
+      VM_TWO_PROD (vemi_u, vemi_e, (ph), (v), (vl));			\
+      vemi_e = VM_VFMACC_VV (vemi_e, (pl), (v), (vl));			\
+      VM_TWO_SUM (vemi_s, vemi_t, vemi_u,				\
+		  VM_VFMV_V_F (vm_erfc_mid[vemi][0], (vl)), (vl));	\
+      vemi_t = VM_VFADD_VV (vemi_t, vemi_e, (vl));			\
+      vemi_t = VM_VFADD_VF (vemi_t, vm_erfc_mid[vemi][1], (vl));	\
+      VM_FAST2SUM ((ph), (pl), vemi_s, vemi_t, (vl));			\
+    }									\
+} while (0)
+
+/* The 1.25 <= |x| erfc tail, out of line: it is the widest dependency
+   chain in the library (a double-double exp pair, multiply and divide),
+   and keeping it in its own function lets the compiler give it a clean
+   register budget instead of spilling against the other bands.  Returns
+   the pair 2^512 up.  */
+__attribute__ ((noinline)) static vm_f_t
+VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
+		    vm_u64_t vau, size_t vl, vm_f_t *rlo)
+{
+  vm_f_t vone = VM_VFMV_V_F (1.0, (vl));
+  vm_f_t mf_th, mf_tl;
+  vm_f_t mf_targ = VM_VFMIN_VF (VM_VFMAX_VF (vax, 1.25, (vl)), 29.0, (vl));
+  mf_targ = VM_VFMERGE_VFM (mf_targ, 25.0,
+				VM_VMAND_MM (mf_neg,
+					     VM_VMSGTU_VX (vau, VM_ERF_B6, (vl)),
+					     (vl)), (vl));
+  vm_f_t mf_x2h, mf_x2l;
+  VM_TWO_PROD (mf_x2h, mf_x2l, mf_targ, mf_targ, (vl));
+  vm_f_t mf_t0h, mf_t0l, mf_ah, mf_al;
+  VM_TWO_SUM (mf_t0h, mf_t0l, VM_VFNEG_V (mf_x2h, (vl)),
+		  VM_VFMV_V_F (-0.5625, (vl)), (vl));
+  VM_TWO_SUM (mf_ah, mf_al, mf_t0h, VM_VFMV_V_F (VM_ERF_SLN2H, (vl)), (vl));
+  mf_al = VM_VFADD_VV (VM_VFADD_VV (mf_t0l, mf_al, (vl)),
+			   VM_VFMV_V_F (VM_ERF_SLN2L, (vl)), (vl));
+  mf_al = VM_VFSUB_VV (mf_al, mf_x2l, (vl));
+  vm_f_t mf_eh, mf_el;
+  VM_ERF_EXP_DD (mf_eh, mf_el, mf_ah, (vl));
+  vm_f_t mf_rho;
+  vm_b_t mf_rb = VM_VMSGEU_VX (VM_BITS (mf_targ), VM_ERF_B286, (vl));
+  VM_ERF_RHO (mf_rho, VM_VFRDIV_VF (VM_VFMUL_VV (mf_targ, mf_targ, (vl)),
+					1.0, (vl)), mf_rb, (vl));
+  vm_f_t mf_sq = VM_VFMUL_VV (mf_rho, mf_rho, (vl));
+  vm_f_t mf_q;
+  VM_ERF_HOR (mf_q, vm_erf_e1, 12, mf_rho, (vl));
+  vm_f_t mf_s = VM_VFMACC_VV (mf_rho, mf_sq, mf_q, (vl));	/* expm1 */
+  vm_f_t mf_fh, mf_fl;
+  VM_TWO_SUM (mf_fh, mf_fl, vone, mf_s, (vl));
+  mf_fl = VM_VFADD_VV (mf_fl, mf_al, (vl));
+  mf_fl = VM_VFMACC_VV (mf_fl, mf_al, mf_s, (vl));
+  vm_f_t mf_dh, mf_dl;
+  VM_DD_MUL (mf_dh, mf_dl, mf_eh, mf_el, mf_fh, mf_fl, (vl));
+  VM_DD_DIV (mf_th, mf_tl, mf_dh, mf_dl, mf_targ,
+		 VM_VFMV_V_F (0.0, (vl)), (vl));
+  *rlo = mf_tl;
+  return mf_th;
 }
 
 static inline vm_f_t
 VM_KFN (erfc) (vm_f_t x, size_t vl)
 {
-  vm_f_t vax = VM_VFABS_V (x, vl);
-  vm_u64_t vbx = VM_BITS (vax);
-  vm_b_t vbig = VM_VMSGEU_VX (vbx, VM_ERF_B1, vl);
-  vm_b_t vtiny = VM_VMSLTU_VX (vbx, VM_ERF_BTINY, vl);
-  vm_b_t vmnan = VM_VMSGTU_VX (vbx, VM_ERF_BINF, vl);
-  /* x < 0 is the sign bit of x, as an unsigned compare -- vmslt_vx is
-     the signed-integer form and will not take a u64 vector.  */
-  vm_b_t vneg = VM_VMSGEU_VX (VM_BITS (x), 0x8000000000000000ULL, vl);
-  vm_f_t vzero = VM_VFMV_V_F (0.0, vl);
-  vm_f_t vph, vpl, vsmall;
+  /* The three bands are disjoint, and a lane's value never depends on
+     which other lanes share its strip (each band's arithmetic is
+     identical whether or not the others run), so each band is entered
+     only when the strip actually has a lane in it.  That keeps the
+     register pressure and the instruction count of this wide kernel down
+     -- it used to evaluate every band on every strip and spilled.  */
+  vm_f_t vzero = VM_VFMV_V_F (0.0, (vl));
+  vm_f_t vone = VM_VFMV_V_F (1.0, (vl));
+  vm_u64_t vbx = VM_BITS (x);
+  vm_u64_t vau = VM_VAND_VX (vbx, VM_ABSMASK_U64, (vl));
+  vm_f_t vax = VM_FROM_BITS (vau);
 
-  /* |x| < 1: 1 - x*P(x^2).  P's own error is 5.6e-25, so this subtraction
-     carries no cancellation worth worrying about until well past 1.
+  vm_b_t mf_spec = VM_VMSGEU_VX (vau, VM_ERF_BINF, (vl));
+  vm_b_t mf_neg = VM_VMSGEU_VX (vbx, VM_ERF_BSIGN, (vl));
+  vm_b_t mf_q1 = VM_VMSLTU_VX (vau, VM_ERF_B025, (vl));	/* < 0.25 */
+  vm_b_t mf_q2 = VM_VMSLTU_VX (vau, VM_ERF_B125, (vl));	/* < 1.25 */
+  vm_b_t mf_vt = VM_VMSLTU_VX (vau, VM_ERF_B56, (vl));	/* < 2^-56 */
+  vm_b_t mf_mid = VM_VMAND_MM (mf_q2, VM_VMNOT_M (mf_q1, (vl)), (vl));
+  vm_b_t mf_tail = VM_VMAND_MM (VM_VMNOT_M (mf_q2, (vl)),
+				VM_VMNOT_M (mf_spec, (vl)), (vl));
 
-     Subnormal x is zeroed as well: erfc(x) = 1 - 1.13*x, and 1.13*x is
-     itself subnormal there, so the true answer is exactly 1 -- but forming
-     that product rounds and raises UNDERFLOW on a lane whose answer is 1.
-     Zeroing makes the product exactly 0 and the answer exactly 1.  */
-  {
-    vm_b_t vsub = VM_VMSLTU_VX (vbx, 0x0010000000000000ULL, vl);
-    VM_ERF_SMALL (vph, vpl,
-		  VM_VFMERGE_VFM (x, 0.0, VM_VMOR_MM (vbig, vsub, vl), vl),
-		  vtiny, vl);
-  }
-  {
-    vm_f_t voh, vol;
-    VM_DD_SUB (voh, vol, VM_VFMV_V_F (1.0, vl), vzero, vph, vpl, vl);
-    VM_DD_COLLAPSE (vsmall, voh, vol, vl);
-  }
+  /* ---- |x| < 0.25: 1 - (x + x*P/Q) ; |x| < 2^-56: 1 - x ---- */
+  vm_f_t mf_res = vzero;
+  if (VM_VFIRST_M (mf_q1, (vl)) >= 0)
+    {
+      vm_b_t mf_r0p = VM_VMAND_MM (mf_q1, VM_VMNOT_M (mf_vt, (vl)), (vl));
+      vm_f_t mf_sm;
+      VM_ERF_SMALL (mf_sm, VM_VFMERGE_VVM (vzero, x, mf_r0p, (vl)), (vl));
+      vm_f_t mf_r0 = VM_VFRSUB_VF (mf_sm, 1.0, (vl));
+      mf_r0 = VM_VFMERGE_VVM (mf_r0, VM_VFRSUB_VF (x, 1.0, (vl)), mf_vt, (vl));
+      mf_res = VM_VFMERGE_VVM (mf_res, mf_r0, mf_q1, (vl));
+    }
 
-  {
-    vm_f_t vth, vtl, vpos, vneg2, vnh, vnl, vtail;
-    /* x < 0: erfc(-a) = 2 - erfc(a), which is exactly 2 for a > 25, so the
-       tail's argument is clamped there rather than evaluated.  erfc(30)
-       underflows, and that UNDERFLOW would be a flag the reference does
-       not have.  */
-    vm_b_t vc25 = VM_VMAND_MM (vneg,
-			       VM_VMAND_MM (VM_VMSGTU_VX (vbx, VM_ERF_B25, vl),
-					    VM_VMNOT_M (vmnan, vl), vl), vl);
-    VM_ERFC_TAIL (vth, vtl, vax, vc25, vl);
-    /* the tail hands back (erfc(ax) * 2^256); collapse up there and scale
-       back once, so the scale-back is the only rounding.  */
-    VM_DD_COLLAPSE (vpos, vth, vtl, vl);
-    vpos = VM_VFMUL_VF (vpos, VM_ERF_SINV, vl);
-    /* erfc(-x) = 2 - erfc(x), the 2 being 2*2^256 up there */
-    VM_DD_SUB (vnh, vnl, VM_VFMV_V_F (VM_ERF_S2, vl), vzero, vth, vtl, vl);
-    VM_DD_COLLAPSE (vneg2, vnh, vnl, vl);
-    vneg2 = VM_VFMUL_VF (vneg2, VM_ERF_SINV, vl);
-    vtail = VM_VFMERGE_VVM (vneg2, vpos, VM_VMNOT_M (vneg, vl), vl);
-    return VM_VFMERGE_VVM (vsmall, vtail, vbig, vl);
-  }
+  /* ---- 0.25 <= |x| < 1.25: dd polynomial; 1.25 <= |x|: dd tail.  Both
+     hand back their pair 2^512 up so the common finish below is one
+     rounding for either band.  ---- */
+  vm_f_t mf_rh = vzero, mf_rl = vzero;
+  if (VM_VFIRST_M (mf_mid, (vl)) >= 0)
+    {
+      vm_f_t mf_v = VM_VFSUB_VF (VM_VFMERGE_VVM (vzero, vax, mf_mid, (vl)),
+				 0.75, (vl));
+      vm_f_t mf_ph, mf_pl;
+      VM_ERFC_MID_POLY (mf_ph, mf_pl, mf_v, (vl));
+      /* keep the pair 2^512 up, as the tail does: the final collapse
+         scales both bands back with one rounding and no spurious
+         underflow on the tiny low parts.  */
+      mf_rh = VM_VFMERGE_VVM (mf_rh, VM_VFMUL_VF (mf_ph, VM_ERF_S, (vl)),
+			      mf_mid, (vl));
+      mf_rl = VM_VFMERGE_VVM (mf_rl, VM_VFMUL_VF (mf_pl, VM_ERF_S, (vl)),
+			      mf_mid, (vl));
+    }
+
+  /* ---- 1.25 <= |x|: dd tail, evaluated 2^512 up ---- */
+  if (VM_VFIRST_M (mf_tail, (vl)) >= 0)
+    {
+      vm_f_t mf_tlo, mf_thi = VM_KFN (erfc_tail) (x, vax, mf_neg, mf_tail,
+						vau, (vl), &mf_tlo);
+      mf_rh = VM_VFMERGE_VVM (mf_rh, mf_thi, mf_tail, (vl));
+      mf_rl = VM_VFMERGE_VVM (mf_rl, mf_tlo, mf_tail, (vl));
+    }
+
+  /* ---- common finish for the mid+tail pair: x < 0 becomes 2-erfc(|x|)
+     in dd (2^513 is 2 in the 2^512-scaled domain) and one rounding
+     scales back.  ---- */
+  if (VM_VFIRST_M (VM_VMOR_MM (mf_mid, mf_tail, (vl)), (vl)) >= 0)
+    {
+      vm_b_t mf_ne = VM_VMAND_MM (mf_neg,
+				  VM_VMOR_MM (mf_mid, mf_tail, (vl)), (vl));
+      vm_f_t mf_nh, mf_nl;
+      VM_TWO_SUM (mf_nh, mf_nl, VM_VFMV_V_F (VM_ERF_S2, (vl)),
+		  VM_VFNEG_V (mf_rh, (vl)), (vl));
+      mf_nl = VM_VFSUB_VV (mf_nl, mf_rl, (vl));
+      mf_rh = VM_VFMERGE_VVM (mf_rh, mf_nh, mf_ne, (vl));
+      mf_rl = VM_VFMERGE_VVM (mf_rl, mf_nl, mf_ne, (vl));
+      mf_res = VM_VFMERGE_VVM (
+	mf_res, VM_VFMUL_VF (VM_VFADD_VV (mf_rh, mf_rl, (vl)), VM_ERF_SINV, (vl)),
+	VM_VMOR_MM (mf_mid, mf_tail, (vl)), (vl));
+    }
+
+  /* ---- NaN/Inf: (2*signbit) + 1/x ---- */
+  if (VM_VFIRST_M (mf_spec, (vl)) >= 0)
+    {
+      vm_f_t mf_inv = VM_VFRDIV_VF (VM_VFMERGE_VVM (vone, x, mf_spec, (vl)),
+				    1.0, (vl));
+      vm_f_t mf_specv = VM_VFADD_VV (VM_VFMERGE_VFM (vzero, 2.0, mf_neg, (vl)),
+				     mf_inv, (vl));
+      mf_res = VM_VFMERGE_VVM (mf_res, mf_specv, mf_spec, (vl));
+    }
+  return mf_res;
 }

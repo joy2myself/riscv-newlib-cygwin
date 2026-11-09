@@ -11,7 +11,7 @@
    resolves the scalar call directly (no PLT), which is the setting most
    favourable to the baseline.
 
-   All 41 binary64 entries and the binary32 set are covered.
+   All 82 entries (41 binary64 + 41 binary32) are covered.
 
    Build natively on an RVV board:
 
@@ -20,7 +20,7 @@
          -I../include -I../runner -I../../include -I../../ -I../shim \
          -o bench bench.c ../../v*.c ../../tables/*.c -lm
 
-   Run:  ./bench [--n N] [--reps R] [--func NAME] [--f32|--f64]
+   Run:  ./bench [--n N] [--reps R] [--func NAME] [--f32|--f64] [--csv]
 
    Timing: CLOCK_MONOTONIC, best of R repetitions per pass.  Both passes
    fold their output streams into a printed checksum, so neither can be
@@ -40,6 +40,7 @@
 #include <vecmath.h>
 
 #define VM_PI 3.14159265358979323846
+#define VM_PI_F 3.14159265f
 #define VM_LOG2E 1.44269504088896340736
 
 static double
@@ -83,6 +84,22 @@ u01 (void)
    a guard lane that has to go through scalar libm measures the fallback,
    not the kernel.  exp[-50,50]; trig/hyper [-10,10]; the [-1,1] family
    clamped to its real domain; logs/powers/roots positive.            */
+
+/* The binary32 entries carry the C99 f suffix and share their binary64
+   counterpart's domain: stripping the suffix maps sinf -> sin, erff -> erf,
+   lgamma_rf -> lgamma_r.  Every binary32 name in the table is exactly the
+   binary64 name plus 'f'.  */
+static const char *
+strip_f32 (const char *name, int f32)
+{
+  static char buf[32];
+  size_t L = strlen (name);
+  if (!f32 || L < 2 || L >= sizeof (buf))
+    return name;
+  memcpy (buf, name, L);
+  buf[L - 1] = 0;
+  return buf;
+}
 
 static double
 domain_lo (const char *name)
@@ -306,6 +323,102 @@ BENCH32 (tanhf, tanhf (x[i]), vtanhf (y, x, n))
 BENCH32 (erff,  erff (x[i]),  verff (y, x, n))
 BENCH32 (sqrtf, sqrtf (x[i]), vsqrtf (y, x, n))
 
+BENCH32 (rsqrtf, 1.0f / sqrtf (x[i]), vrsqrtf (y, x, n))
+BENCH32 (cbrtf,   cbrtf (x[i]),   vcbrtf (y, x, n))
+BENCH32 (exp2f,   exp2f (x[i]),   vexp2f (y, x, n))
+BENCH32 (exp10f,  exp10f (x[i]),  vexp10f (y, x, n))
+BENCH32 (expm1f,  expm1f (x[i]),  vexpm1f (y, x, n))
+BENCH32 (log2f,   log2f (x[i]),   vlog2f (y, x, n))
+BENCH32 (log10f,  log10f (x[i]),  vlog10f (y, x, n))
+BENCH32 (log1pf,  log1pf (x[i]),  vlog1pf (y, x, n))
+BENCH32 (log2p1f, log2f (1.0f + x[i]), vlog2p1f (y, x, n))
+
+BENCH32 (tanf,   tanf (x[i]),   vtanf (y, x, n))
+BENCH32 (sinpif, sinf (VM_PI_F * x[i]), vsinpif (y, x, n))
+BENCH32 (cospif, cosf (VM_PI_F * x[i]), vcospif (y, x, n))
+BENCH32 (tanpif, tanf (VM_PI_F * x[i]), vtanpif (y, x, n))
+
+BENCH32 (asinf,   asinf (x[i]),   vasinf (y, x, n))
+BENCH32 (acosf,   acosf (x[i]),   vacosf (y, x, n))
+BENCH32 (atanf,   atanf (x[i]),   vatanf (y, x, n))
+BENCH32 (asinpif, asinf (x[i]) / VM_PI_F, vasinpif (y, x, n))
+BENCH32 (acospif, acosf (x[i]) / VM_PI_F, vacospif (y, x, n))
+BENCH32 (atanpif, atanf (x[i]) / VM_PI_F, vatanpif (y, x, n))
+
+BENCH32 (sinhf,  sinhf (x[i]),  vsinhf (y, x, n))
+BENCH32 (coshf,  coshf (x[i]),  vcoshf (y, x, n))
+BENCH32 (asinhf, asinhf (x[i]), vasinhf (y, x, n))
+BENCH32 (acoshf, acoshf (x[i]), vacoshf (y, x, n))
+BENCH32 (atanhf, atanhf (x[i]), vatanhf (y, x, n))
+
+BENCH32 (erfcf,   erfcf (x[i]),   verfcf (y, x, n))
+BENCH32 (tgammaf, tgammaf (x[i]), vtgammaf (y, x, n))
+BENCH32 (lgammaf, lgammaf (x[i]), vlgammaf (y, x, n))
+
+/* binary32: entries that need more than one buffer */
+#define BENCH32_2(NAME, SCAL, VEC, LO2, HI2)                             \
+  static void                                                            \
+  bf_##NAME (float *y, const float *x, size_t n, int reps,               \
+             double *sc, double *vc, double *csum)                       \
+  {                                                                      \
+    float *z = malloc (n * sizeof (float));                              \
+    for (size_t i = 0; i < n; i++) z[i] = (LO2) + (float) u01 () * ((HI2) - (LO2)); \
+    *sc = NS_PER_ELST (reps, n,                                          \
+      for (size_t i = 0; i < n; i++) y[i] = SCAL);                       \
+    for (size_t i = 0; i < n; i++) *csum += y[i];                        \
+    *vc = NS_PER_ELST (reps, n, VEC);                                    \
+    for (size_t i = 0; i < n; i++) *csum += y[i];                        \
+    free (z);                                                            \
+  }
+
+BENCH32_2 (powf, powf (x[i], z[i]), vpowf (y, x, z, n), 1.0f, 2.0f)
+BENCH32_2 (hypotf, hypotf (x[i], z[i]), vhypotf (y, x, z, n), -10.0f, 10.0f)
+BENCH32_2 (atan2f, atan2f (x[i], z[i]), vatan2f (y, x, z, n), -10.0f, 10.0f)
+BENCH32_2 (atan2pif, atan2f (x[i], z[i]) / VM_PI_F,
+	   vatan2pif (y, x, z, n), -10.0f, 10.0f)
+
+static void
+bf_sincos (float *y, const float *x, size_t n, int reps, double *sc,
+	   double *vc, double *csum)
+{
+  float *y2 = malloc (n * sizeof (float));
+  *sc = NS_PER_ELST (reps, n,
+    for (size_t i = 0; i < n; i++) { y[i] = sinf (x[i]); y2[i] = cosf (x[i]); });
+  for (size_t i = 0; i < n; i++) *csum += y[i] + y2[i];
+  *vc = NS_PER_ELST (reps, n, vsincosf (y, y2, x, n));
+  for (size_t i = 0; i < n; i++) *csum += y[i] + y2[i];
+  free (y2);
+}
+
+static void
+bf_sincospi (float *y, const float *x, size_t n, int reps, double *sc,
+	     double *vc, double *csum)
+{
+  float *y2 = malloc (n * sizeof (float));
+  *sc = NS_PER_ELST (reps, n,
+    for (size_t i = 0; i < n; i++)
+      { y[i] = sinf (VM_PI_F * x[i]); y2[i] = cosf (VM_PI_F * x[i]); });
+  for (size_t i = 0; i < n; i++) *csum += y[i] + y2[i];
+  *vc = NS_PER_ELST (reps, n, vsincospif (y, y2, x, n));
+  for (size_t i = 0; i < n; i++) *csum += y[i] + y2[i];
+  free (y2);
+}
+
+/* lgamma_r: second output is an int sign per lane.  */
+static void
+bf_lgamma_r (float *y, const float *x, size_t n, int reps, double *sc,
+	     double *vc, double *csum)
+{
+  int *sg = malloc (n * sizeof (int));
+  int *sg2 = malloc (n * sizeof (int));
+  *sc = NS_PER_ELST (reps, n,
+    for (size_t i = 0; i < n; i++) y[i] = lgammaf_r (x[i], &sg2[i]));
+  for (size_t i = 0; i < n; i++) { *csum += y[i]; *csum += sg2[i]; }
+  *vc = NS_PER_ELST (reps, n, vlgamma_rf (y, sg, x, n));
+  for (size_t i = 0; i < n; i++) { *csum += y[i]; *csum += sg[i]; }
+  free (sg); free (sg2);
+}
+
 /* ------------------------------------------------------------------ */
 
 typedef void (*run64_t) (double *, const double *, size_t, int, double *,
@@ -371,13 +484,47 @@ static const bench_t benches[] = {
   { "lgamma",   b_lgamma,   NULL },
   { "lgamma_r", b_lgamma_r, NULL },
   /* binary32 */
+  { "sqrtf",    NULL,       bf_sqrtf },
+  { "rsqrtf",   NULL,       bf_rsqrtf },
+  { "cbrtf",    NULL,       bf_cbrtf },
+  { "powf",     NULL,       bf_powf },
+  { "hypotf",   NULL,       bf_hypotf },
+  { "expf",     NULL,       bf_expf },
+  { "exp2f",    NULL,       bf_exp2f },
+  { "exp10f",   NULL,       bf_exp10f },
+  { "expm1f",   NULL,       bf_expm1f },
+  { "logf",     NULL,       bf_logf },
+  { "log2f",    NULL,       bf_log2f },
+  { "log10f",   NULL,       bf_log10f },
+  { "log1pf",   NULL,       bf_log1pf },
+  { "log2p1f",  NULL,       bf_log2p1f },
   { "sinf",     NULL,       bf_sinf },
   { "cosf",     NULL,       bf_cosf },
-  { "expf",     NULL,       bf_expf },
-  { "logf",     NULL,       bf_logf },
+  { "tanf",     NULL,       bf_tanf },
+  { "sincosf",  NULL,       bf_sincos },
+  { "sinpif",   NULL,       bf_sinpif },
+  { "cospif",   NULL,       bf_cospif },
+  { "tanpif",   NULL,       bf_tanpif },
+  { "sincospif", NULL,      bf_sincospi },
+  { "asinf",    NULL,       bf_asinf },
+  { "acosf",    NULL,       bf_acosf },
+  { "atanf",    NULL,       bf_atanf },
+  { "atan2f",   NULL,       bf_atan2f },
+  { "asinpif",  NULL,       bf_asinpif },
+  { "acospif",  NULL,       bf_acospif },
+  { "atanpif",  NULL,       bf_atanpif },
+  { "atan2pif", NULL,       bf_atan2pif },
+  { "sinhf",    NULL,       bf_sinhf },
+  { "coshf",    NULL,       bf_coshf },
   { "tanhf",    NULL,       bf_tanhf },
+  { "asinhf",   NULL,       bf_asinhf },
+  { "acoshf",   NULL,       bf_acoshf },
+  { "atanhf",   NULL,       bf_atanhf },
   { "erff",     NULL,       bf_erff },
-  { "sqrtf",    NULL,       bf_sqrtf },
+  { "erfcf",    NULL,       bf_erfcf },
+  { "tgammaf",  NULL,       bf_tgammaf },
+  { "lgammaf",  NULL,       bf_lgammaf },
+  { "lgamma_rf", NULL,      bf_lgamma_r },
 };
 #define NBENCH ((int) (sizeof benches / sizeof benches[0]))
 
@@ -388,6 +535,7 @@ main (int argc, char **argv)
   int reps = 7;
   const char *only = NULL;
   int want32 = -1;			/* -1 = both, 0 = f64 only, 1 = f32 only */
+  int csv = 0;
 
   for (int i = 1; i < argc; i++)
     {
@@ -401,10 +549,12 @@ main (int argc, char **argv)
 	want32 = 1;
       else if (!strcmp (argv[i], "--f64"))
 	want32 = 0;
+      else if (!strcmp (argv[i], "--csv"))
+	csv = 1;
       else
 	{
 	  fprintf (stderr,
-		   "usage: bench [--n N] [--reps R] [--func NAME] [--f32|--f64]\n");
+		   "usage: bench [--n N] [--reps R] [--func NAME] [--f32|--f64] [--csv]\n");
 	  return 2;
 	}
     }
@@ -414,7 +564,11 @@ main (int argc, char **argv)
 
   printf ("libvecmath bench: n=%zu reps=%d VLEN=%zu bits\n",
 	  n, reps, vlenb * 8);
-  printf ("%-9s %12s %12s %9s\n", "func", "scalar_ns/e", "vector_ns/e", "speedup");
+  if (csv)
+    printf ("func,scalar_ns_e,vector_ns_e,speedup\n");
+  else
+    printf ("%-9s %12s %12s %9s\n", "func", "scalar_ns/e", "vector_ns/e",
+	    "speedup");
 
   double csum = 0.0;
   for (int b = 0; b < NBENCH; b++)
@@ -428,8 +582,9 @@ main (int argc, char **argv)
       const size_t esz = f32 ? sizeof (float) : sizeof (double);
       void *xb = malloc (n * esz), *yb = malloc (n * esz);
       double sc = 0.0, vc = 0.0;
-      const double lo = domain_lo (benches[b].name);
-      const double hi = domain_hi (benches[b].name);
+      const char *dkey = strip_f32 (benches[b].name, f32);
+      const double lo = domain_lo (dkey);
+      const double hi = domain_hi (dkey);
 
       if (f32)
 	{
@@ -446,8 +601,12 @@ main (int argc, char **argv)
 	  benches[b].run64 (y, x, n, reps, &sc, &vc, &csum);
 	}
 
-      printf ("%-9s %12.3f %12.3f %8.2fx\n", benches[b].name, sc, vc,
-	      vc > 0.0 ? sc / vc : 0.0);
+      if (csv)
+	printf ("%s,%.3f,%.3f,%.2f\n", benches[b].name, sc, vc,
+		vc > 0.0 ? sc / vc : 0.0);
+      else
+	printf ("%-9s %12.3f %12.3f %8.2fx\n", benches[b].name, sc, vc,
+		vc > 0.0 ? sc / vc : 0.0);
       free (xb); free (yb);
     }
   printf ("checksum %g\n", csum);

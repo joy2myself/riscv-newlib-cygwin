@@ -8,9 +8,14 @@
 
    Buffer bound: vl <= VLMAX(e64, LMUL <= 4) = VLEN/16 lanes; 300 doubles
    cover VLEN up to 4096 at m4.  Trailing inactive lanes get viota index
-   == popcount, hence the slack over 256.  */
+   == popcount, hence the slack over 256.
 
-static inline vm_f_t
+   The epilogue is deliberately out of line: its 4.8 KB of stack buffers
+   would otherwise be charged (frame setup, stack probing) to every strip
+   of every kernel that carries a fixup, even when no lane takes it --
+   worth 30-45% of the hot-loop throughput on the X60.  */
+
+__attribute__ ((noinline)) static vm_f_t
 VM_KFN (scalar_fixup) (vm_f_t x, vm_f_t y, vm_b_t m, size_t vl,
 		       double (*fn) (double))
 {
@@ -28,7 +33,7 @@ VM_KFN (scalar_fixup) (vm_f_t x, vm_f_t y, vm_b_t m, size_t vl,
 }
 
 /* Two-input variant (pow & co): fn(x, y).  */
-static inline vm_f_t
+__attribute__ ((noinline)) static vm_f_t
 VM_KFN (scalar_fixup2) (vm_f_t x, vm_f_t y, vm_f_t r, vm_b_t m, size_t vl,
 			double (*fn) (double, double))
 {

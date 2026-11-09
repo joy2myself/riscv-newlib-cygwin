@@ -20,7 +20,6 @@
 #include <vecmath_dd.h>
 #include "vecmath_local.h"
 #include <k_misc.inc>
-#include <k_hypot.inc>
 
 /* ---- binary32 layer ---- */
 #define VM32_LMUL 2

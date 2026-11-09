@@ -72,7 +72,7 @@ vlog2p1 (double *__restrict y, const double *__restrict x, size_t n)
     {
       vl = VM_VSETVL (avl);
       /* fixup = scalar log1p: log2p1 dd-scales every lane by 1/ln2.  */
-      VM_VSE64 (y, VM_KFN (log2p1) (VM_VLE64 (x, vl), vl, log1p), vl);
+      VM_VSE64 (y, VM_KFN (log2p1) (VM_VLE64 (x, vl), vl, log2p1_scalar), vl);
     }
 }
 

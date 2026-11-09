@@ -14,7 +14,6 @@
 #include <vecmath_rvvcompat.h>
 #include <vecmath_dd.h>
 #include "vecmath_local.h"
-#include <k_log.inc>
 #include <k_hyperinv.inc>
 
 void

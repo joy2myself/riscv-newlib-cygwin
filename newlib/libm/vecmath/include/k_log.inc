@@ -129,91 +129,352 @@
   (yl) = VM_VFMERGE_VFM (vmlgd__l, 0.0, vmlgd__mspec, (vl));		\
 } while (0)
 
+/* ------------------------------------------------------------------ */
+/* Lean plain-double log (Arm log.c main path + near-1 path, no dd).
+   The dd form (VM_LOG_DD) is kept above for log10 and for
+   k_gamma/k_hyperinv, which need the extra bits.  This one is the
+   'false position' the -O2 scalar log is: the near-1 polynomial and the
+   table path share the same 0.5-0.6 ulp budget, so the final rounding is
+   all that is left to do.  */
+/* Plain-double log core (Arm log.c main + near-1 path), no fixup: the
+   caller gets the value and the special-lane mask, and applies the
+   scalar fallback itself.  Shared by log, log2 and log2p1.  */
+#define VM_LOG_PLAIN(yoh, yolo, mo, x, vl) do {				\
+  const struct vm_log_data *vlD__ = &__vecmath_log_data;		\
+  vm_f_t vlx__ = (x);							\
+  vm_u64_t vlix__ = VM_BITS (vlx__);					\
+  vm_u64_t vltop__ = VM_VSRL_VX (vlix__, 48, (vl));			\
+  vm_b_t vlmsp__ = VM_VMSGEU_VX (VM_VSUB_VX (vltop__, 0x10, (vl)),	\
+				 0x7fe0, (vl));				\
+  vm_b_t vlmne__ = VM_VMSLTU_VX (VM_VSUB_VX (vlix__, VM_LOG_LO, (vl)),	\
+				 VM_LOG_HILO, (vl));			\
+  vm_f_t vlxs__ = VM_VFMERGE_VFM (vlx__, 1.0, vlmsp__, (vl));		\
+  vm_f_t vlxn__ = VM_VFMERGE_VFM (vlx__, 1.0,				\
+				  VM_VMNOT_M (vlmne__, (vl)), (vl));	\
+  vm_f_t vlyn__, vlylo__;						\
+  {									\
+    /* ---- near-1 path ---- */						\
+    vm_f_t r = VM_VFSUB_VF (vlxn__, 1.0, (vl));				\
+    vm_f_t r2 = VM_VFMUL_VV (r, r, (vl));				\
+    vm_f_t r3 = VM_VFMUL_VV (r, r2, (vl));				\
+    vm_f_t b = VM_VFMACC_VF (VM_VFMV_V_F (vlD__->poly1[7], (vl)),	\
+			     vlD__->poly1[8], r, (vl));			\
+    b = VM_VFMACC_VF (b, vlD__->poly1[9], r2, (vl));			\
+    b = VM_VFMACC_VF (b, vlD__->poly1[10], r3, (vl));			\
+    vm_f_t a = VM_VFMACC_VF (VM_VFMV_V_F (vlD__->poly1[4], (vl)),	\
+			     vlD__->poly1[5], r, (vl));			\
+    a = VM_VFMACC_VF (a, vlD__->poly1[6], r2, (vl));			\
+    a = VM_VFMACC_VV (a, r3, b, (vl));					\
+    vm_f_t pp = VM_VFMACC_VF (VM_VFMV_V_F (vlD__->poly1[1], (vl)),	\
+			      vlD__->poly1[2], r, (vl));		\
+    pp = VM_VFMACC_VF (pp, vlD__->poly1[3], r2, (vl));			\
+    pp = VM_VFMACC_VV (pp, r3, a, (vl));				\
+    vlyn__ = VM_VFMUL_VV (r3, pp, (vl));				\
+    vm_f_t w = VM_VFMUL_VF (r, 0x1p27, (vl));				\
+    vm_f_t rhi = VM_VFSUB_VV (VM_VFADD_VV (r, w, (vl)), w, (vl));	\
+    vm_f_t rlo = VM_VFSUB_VV (r, rhi, (vl));				\
+    w = VM_VFMUL_VF (VM_VFMUL_VV (rhi, rhi, (vl)),			\
+		     vlD__->poly1[0], (vl));				\
+    vm_f_t hi = VM_VFADD_VV (r, w, (vl));				\
+    vm_f_t lo = VM_VFADD_VV (VM_VFSUB_VV (r, hi, (vl)), w, (vl));	\
+    lo = VM_VFADD_VV (lo, VM_VFMUL_VF (VM_VFMUL_VV (			\
+      rlo, VM_VFADD_VV (rhi, r, (vl)), (vl)), vlD__->poly1[0], (vl)),	\
+      (vl));								\
+    {									\
+      /* track the last two roundings: y = (npoly + lo) + hi */		\
+      vm_f_t vls1__ = VM_VFADD_VV (vlyn__, lo, (vl));			\
+      vm_f_t vle1__ = VM_VFADD_VV (					\
+	VM_VFSUB_VV (vlyn__, vls1__, (vl)), lo, (vl));			\
+      vlyn__ = VM_VFADD_VV (vls1__, hi, (vl));				\
+      vlylo__ = VM_VFADD_VV (						\
+	VM_VFADD_VV (VM_VFSUB_VV (vls1__, vlyn__, (vl)), hi, (vl)),	\
+	vle1__, (vl));							\
+    }									\
+    /* ---- main path ---- */						\
+    vm_u64_t ixb = VM_BITS (vlxs__);					\
+    vm_u64_t tmp = VM_VSUB_VX (ixb, VM_LOG_OFF, (vl));			\
+    vm_u64_t off = VM_VSLL_VX (VM_VAND_VX (				\
+      VM_VSRL_VX (tmp, 45, (vl)), 127, (vl)), 4, (vl));			\
+    vm_f_t invc = VM_VLUXEI64 (&vlD__->tab[0].invc, off, (vl));		\
+    vm_f_t logc = VM_VLUXEI64 (&vlD__->tab[0].logc, off, (vl));		\
+    vm_i64_t k = VM_VSRA_VX (VM_REINT_U_I (tmp), 52, (vl));		\
+    vm_u64_t iz = VM_VSUB_VV (ixb,						\
+      VM_VAND_VX (tmp, 0xfff0000000000000ULL, (vl)), (vl));		\
+    vm_f_t z = VM_FROM_BITS (iz);					\
+    vm_f_t kd = VM_VFCVT_F_X_V (k, (vl));				\
+    r = VM_VFMACC_VV (VM_VFMV_V_F (-1.0, (vl)), invc, z, (vl));		\
+    w = VM_VFMACC_VF (logc, vlD__->ln2hi, kd, (vl));			\
+    hi = VM_VFADD_VV (w, r, (vl));					\
+    lo = VM_VFADD_VV (VM_VFADD_VV (VM_VFSUB_VV (w, hi, (vl)), r, (vl)),	\
+		      VM_VFMUL_VF (kd, vlD__->ln2lo, (vl)), (vl));	\
+    r2 = VM_VFMUL_VV (r, r, (vl));					\
+    {									\
+      vm_f_t u = VM_VFMACC_VF (VM_VFMV_V_F (vlD__->poly[3], (vl)),	\
+			       vlD__->poly[4], r, (vl));		\
+      vm_f_t q = VM_VFMACC_VF (VM_VFMV_V_F (vlD__->poly[1], (vl)),	\
+			       vlD__->poly[2], r, (vl));		\
+      q = VM_VFADD_VV (q, VM_VFMUL_VV (r2, u, (vl)), (vl));		\
+      vm_f_t pr = VM_VFADD_VV (VM_VFMUL_VF (r2, vlD__->poly[0], (vl)),	\
+	VM_VFMUL_VV (VM_VFMUL_VV (r, r2, (vl)), q, (vl)), (vl));	\
+      /* y = (lo + pr) + hi, tracked */				\
+      vm_f_t vlt__, vlte__;						\
+      VM_TWO_SUM (vlt__, vlte__, lo, pr, (vl));				\
+      vm_f_t ym = VM_VFADD_VV (vlt__, hi, (vl));			\
+      {									\
+	vm_f_t vlye__ = VM_VFADD_VV (					\
+	  VM_VFADD_VV (VM_VFSUB_VV (vlt__, ym, (vl)), hi, (vl)),	\
+	  vlte__, (vl));						\
+	vm_f_t vlmh__ = vlyn__;						\
+	vm_f_t vlml__ = vlylo__;					\
+	vlyn__ = VM_VFMERGE_VVM (ym, vlmh__, vlmne__, (vl));		\
+	vlylo__ = VM_VFMERGE_VVM (vlye__, vlml__, vlmne__, (vl));	\
+      }									\
+    }									\
+  }									\
+  (yoh) = vlyn__;							\
+  (yolo) = vlylo__;							\
+  (mo) = vlmsp__;							\
+} while (0)
+
 static inline vm_f_t
 VM_KFN (log_k) (vm_f_t x, size_t vl, double (*fixup) (double))
 {
-  vm_f_t yh, yl;
-  VM_LOG_DD (yh, yl, x, vl, fixup);
-  vm_f_t y;
-  VM_DD_COLLAPSE (y, yh, yl, vl);
-  return y;
+  vm_f_t yh, yl, y;
+  vm_b_t mspec;
+  VM_LOG_PLAIN (yh, yl, mspec, x, vl);
+  y = VM_VFADD_VV (yh, yl, (vl));
+  return VM_KFN (scalar_fixup) (x, y, mspec, vl, fixup);
 }
 
 /* ------------------------------------------------------------------ */
-/* log2(x) -- vectorization of libm/common/log2.c (N=64, orders 7/11).
-   fixup must be scalar log2().  */
+/* Arm log.c coefficients pre-divided by ln2 offline (correctly rounded
+   doubles) so the same reduction evaluates log2() directly in log2 units
+   -- no final scaling rounding.  A static table keeps the coefficients in
+   .rodata (one fld per use) instead of a multi-instruction literal.  */
+#ifndef VM_LOG2_SCALED_TAB
+#define VM_LOG2_SCALED_TAB
+static const double __vm_log2_scaled[17] = {
+  /* A0..A4 = log_data.poly / ln2 */
+  -0x1.71547652b8300p-1, 0x1.ec709dc340953p-2, -0x1.71547651c8f35p-2,
+  0x1.2777ebe12dda5p-2, -0x1.ec738d616fe26p-3,
+  /* B0..B10 = log_data.poly1 / ln2 */
+  -0x1.71547652b82fep-1, 0x1.ec709dc3a042ep-2, -0x1.71547652b8167p-2,
+  0x1.2776c50ece9fdp-2, -0x1.ec709dc53e54fp-3, 0x1.a617642fb4fd8p-3,
+  -0x1.7154722fe1de8p-3, 0x1.48480f16355b5p-3, -0x1.277a7397dd39ap-3,
+  0x1.0f4b791a43a6dp-3, -0x1.ec256d5ede7cdp-4,
+};
+#define VM_L2A0 __vm_log2_scaled[0]
+#define VM_L2A1 __vm_log2_scaled[1]
+#define VM_L2A2 __vm_log2_scaled[2]
+#define VM_L2A3 __vm_log2_scaled[3]
+#define VM_L2A4 __vm_log2_scaled[4]
+#define VM_L2B0 __vm_log2_scaled[5]
+#define VM_L2B1 __vm_log2_scaled[6]
+#define VM_L2B2 __vm_log2_scaled[7]
+#define VM_L2B3 __vm_log2_scaled[8]
+#define VM_L2B4 __vm_log2_scaled[9]
+#define VM_L2B5 __vm_log2_scaled[10]
+#define VM_L2B6 __vm_log2_scaled[11]
+#define VM_L2B7 __vm_log2_scaled[12]
+#define VM_L2B8 __vm_log2_scaled[13]
+#define VM_L2B9 __vm_log2_scaled[14]
+#define VM_L2B10 __vm_log2_scaled[15]
+#define VM_L2INV __vm_log2_scaled[16]
+#endif
+
+/* Lean plain-double log2 (Arm log.c reduction evaluated in log2 units).
+   The final composition is a dd pair so log2p1 can add its tail before
+   the one final rounding.  */
+#define VM_LOG2_PLAIN(yh, yl, mo, x, vl) do {				\
+  const struct vm_log_data *vlq_D__ = &__vecmath_log_data;		\
+  vm_f_t vlq_x__ = (x);							\
+  vm_u64_t vlq_ix__ = VM_BITS (vlq_x__);				\
+  vm_u64_t vlq_top__ = VM_VSRL_VX (vlq_ix__, 48, (vl));			\
+  vm_b_t vlq_msp__ = VM_VMSGEU_VX (VM_VSUB_VX (vlq_top__, 0x10, (vl)),	\
+				   0x7fe0, (vl));			\
+  vm_b_t vlq_mne__ = VM_VMSLTU_VX (VM_VSUB_VX (vlq_ix__, VM_LOG_LO, (vl)), \
+				   VM_LOG_HILO, (vl));			\
+  vm_f_t vlq_xs__ = VM_VFMERGE_VFM (vlq_x__, 1.0, vlq_msp__, (vl));	\
+  vm_f_t vlq_xn__ = VM_VFMERGE_VFM (vlq_x__, 1.0,			\
+				    VM_VMNOT_M (vlq_mne__, (vl)), (vl)); \
+  vm_f_t vlq_yh__, vlq_yl__;						\
+  {									\
+    /* ---- near-1 path, log2 units ---- */				\
+    vm_f_t r = VM_VFSUB_VF (vlq_xn__, 1.0, (vl));			\
+    vm_f_t r2 = VM_VFMUL_VV (r, r, (vl));				\
+    vm_f_t r3 = VM_VFMUL_VV (r, r2, (vl));				\
+    vm_f_t b = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2B7, (vl)),		\
+			     VM_L2B8, r, (vl));				\
+    b = VM_VFMACC_VF (b, VM_L2B9, r2, (vl));				\
+    b = VM_VFMACC_VF (b, VM_L2B10, r3, (vl));				\
+    vm_f_t a = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2B4, (vl)),		\
+			     VM_L2B5, r, (vl));				\
+    a = VM_VFMACC_VF (a, VM_L2B6, r2, (vl));				\
+    a = VM_VFMACC_VV (a, r3, b, (vl));					\
+    vm_f_t pp = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2B1, (vl)),		\
+			      VM_L2B2, r, (vl));			\
+    pp = VM_VFMACC_VF (pp, VM_L2B3, r2, (vl));				\
+    pp = VM_VFMACC_VV (pp, r3, a, (vl));				\
+    vm_f_t np = VM_VFMUL_VV (r3, pp, (vl));				\
+    vm_f_t w = VM_VFMUL_VF (r, 0x1p27, (vl));				\
+    vm_f_t rhi = VM_VFSUB_VV (VM_VFADD_VV (r, w, (vl)), w, (vl));	\
+    vm_f_t rlo = VM_VFSUB_VV (r, rhi, (vl));				\
+    /* t = r/ln2 correctly rounded, te its exact residual */		\
+    vm_f_t tp = VM_VFMUL_VF (r, VM_INVLN2_LO, (vl));			\
+    vm_f_t t = VM_VFMACC_VF (tp, VM_INVLN2_HI, r, (vl));		\
+    vm_f_t te = VM_VFMACC_VF (VM_VFMACC_VF (VM_VFNEG_V (t, (vl)),	\
+					   VM_INVLN2_HI, r, (vl)),	\
+			      VM_INVLN2_LO, r, (vl));			\
+    vm_f_t w2 = VM_VFMUL_VF (VM_VFMUL_VV (rhi, rhi, (vl)), VM_L2B0, (vl)); \
+    vm_f_t hi = VM_VFADD_VV (t, w2, (vl));				\
+    vm_f_t lo = VM_VFADD_VV (VM_VFSUB_VV (t, hi, (vl)), w2, (vl));	\
+    lo = VM_VFADD_VV (lo, VM_VFMUL_VF (VM_VFMUL_VV (			\
+      rlo, VM_VFADD_VV (rhi, r, (vl)), (vl)), VM_L2B0, (vl)), (vl));	\
+    lo = VM_VFADD_VV (lo, te, (vl));					\
+    {									\
+      vm_f_t s1 = VM_VFADD_VV (np, lo, (vl));				\
+      vm_f_t s1e = VM_VFSUB_VV (VM_VFSUB_VV (s1, np, (vl)), lo, (vl));	\
+      vm_f_t y1 = VM_VFADD_VV (s1, hi, (vl));				\
+      vm_f_t y1e = VM_VFADD_VV (VM_VFADD_VV (VM_VFSUB_VV (s1, y1, (vl)), \
+					     hi, (vl)), s1e, (vl))	\
+	;								\
+      vm_f_t vlynh__ = y1;						\
+      vm_f_t vlyl__ = y1e;						\
+      /* ---- main path, log2 units ---- */				\
+      vm_u64_t ixb = VM_BITS (vlq_xs__);				\
+      vm_u64_t tmp = VM_VSUB_VX (ixb, VM_LOG_OFF, (vl));		\
+      vm_u64_t off = VM_VSLL_VX (VM_VAND_VX (				\
+	VM_VSRL_VX (tmp, 45, (vl)), 127, (vl)), 4, (vl));		\
+      vm_f_t invc = VM_VLUXEI64 (&vlq_D__->tab[0].invc, off, (vl));	\
+      vm_f_t logc = VM_VLUXEI64 (&vlq_D__->tab[0].logc, off, (vl));	\
+      vm_i64_t k = VM_VSRA_VX (VM_REINT_U_I (tmp), 52, (vl));		\
+      vm_u64_t iz = VM_VSUB_VV (ixb,					\
+	VM_VAND_VX (tmp, 0xfff0000000000000ULL, (vl)), (vl));		\
+      vm_f_t z = VM_FROM_BITS (iz);					\
+      vm_f_t kd = VM_VFCVT_F_X_V (k, (vl));				\
+      vm_f_t log2c = VM_VFMACC_VF (VM_VFMUL_VF (logc,			\
+	VM_INVLN2_LO, (vl)), VM_INVLN2_HI, logc, (vl));			\
+      r = VM_VFMACC_VV (VM_VFMV_V_F (-1.0, (vl)), invc, z, (vl));	\
+      vm_f_t u1 = VM_VFMUL_VF (r, VM_INVLN2_LO, (vl));			\
+      vm_f_t t1 = VM_VFMACC_VF (u1, VM_INVLN2_HI, r, (vl));		\
+      vm_f_t t1e = VM_VFMACC_VF (VM_VFMACC_VF (VM_VFNEG_V (t1, (vl)),	\
+					       VM_INVLN2_HI, r, (vl)),	\
+				  VM_INVLN2_LO, r, (vl));		\
+      w2 = VM_VFADD_VV (kd, log2c, (vl));				\
+      hi = VM_VFADD_VV (w2, t1, (vl));					\
+      lo = VM_VFADD_VV (VM_VFADD_VV (VM_VFSUB_VV (w2, hi, (vl)), t1, (vl)), \
+			t1e, (vl));					\
+      r2 = VM_VFMUL_VV (r, r, (vl));					\
+      {									\
+	vm_f_t q0 = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2A3, (vl)),		\
+				  VM_L2A4, r, (vl));			\
+	vm_f_t q1 = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2A1, (vl)),		\
+				  VM_L2A2, r, (vl));			\
+	q1 = VM_VFADD_VV (q1, VM_VFMUL_VV (r2, q0, (vl)), (vl));	\
+	vm_f_t pr = VM_VFADD_VV (VM_VFMUL_VF (r2, VM_L2A0, (vl)),	\
+	  VM_VFMUL_VV (VM_VFMUL_VV (r, r2, (vl)), q1, (vl)), (vl));	\
+	vm_f_t ta, tae;						\
+	VM_TWO_SUM (ta, tae, lo, pr, (vl));				\
+	vm_f_t ym = VM_VFADD_VV (ta, hi, (vl));			\
+	vm_f_t ye = VM_VFADD_VV (					\
+	  VM_VFADD_VV (VM_VFSUB_VV (ta, ym, (vl)), hi, (vl)), tae, (vl)); \
+	vlq_yh__ = VM_VFMERGE_VVM (ym, vlynh__, vlq_mne__, (vl));	\
+	vlq_yl__ = VM_VFMERGE_VVM (ye, vlyl__, vlq_mne__, (vl));	\
+      }									\
+    }									\
+  }									\
+  (yh) = vlq_yh__;							\
+  (yl) = vlq_yl__;							\
+  (mo) = vlq_msp__;							\
+} while (0)
+
+#define VM_L2_LP1 0x1.ec709dc3a0457p-1
+#define VM_L2_LP2 0x1.2776c50ee7037p-1
+#define VM_L2_LP3 0x1.a61762d25e3b9p-2
+#define VM_L2_LP4 0x1.484afccf4e947p-2
+#define VM_L2_LP5 0x1.0ca126c29e1efp-2
+#define VM_L2_LP6 0x1.c477fc00c758bp-3
+#define VM_L2_LP7 0x1.b53bc0f37a0cap-3
+
+/* fdlibm s_log1p reduction evaluated in log2 units: log2(x) as a dd
+   pair for a finite x > 0 (special lanes sanitized).  */
+#define VM_LOG2_FD_CORE(yh, yl, x, vl) do {				\
+  vm_f_t vmk_x = (x);							\
+  vm_u64_t vmk_ix = VM_BITS (vmk_x);					\
+  vm_u64_t vmk_top = VM_VSRL_VX (vmk_ix, 48, (vl));			\
+  vm_b_t vmk_msp = VM_VMSGEU_VX (VM_VSUB_VX (vmk_top, 0x10, (vl)),	\
+				   0x7fe0, (vl));			\
+  /* Plain-double log2 via fdlibm's log1p reduction evaluated in log2 \
+     units: x = 2^k*(1+f), log2(x) = k + log2(1+f), the second term from \
+     the s = f/(2+f) rational with all coefficients pre-divided by ln2. \
+     Subnormal/zero/negative/inf lanes go to scalar log2.  */ \
+  vm_u64_t ix = vmk_ix; \
+  vm_u64_t top16 = vmk_top; \
+  vm_b_t m_spec = vmk_msp; \
+  vm_f_t xs = VM_VFMERGE_VFM ((x), 1.5, vmk_msp, (vl)); \
+  vm_u64_t ub = VM_BITS (xs); \
+  vm_u64_t uh = VM_VSRL_VX (ub, 32, (vl)); \
+  vm_i64_t kraw = VM_REINT_U_I ( \
+    VM_VSUB_VX (VM_VSRL_VX (ub, 52, (vl)), 1023, (vl))); \
+  vm_u64_t hu = VM_VAND_VX (uh, 0x000fffff, (vl)); \
+  vm_b_t m_hus = VM_VMSLTU_VX (hu, 0x6a09e, (vl)); \
+  vm_u64_t unb = VM_VMERGE_VVM ( \
+    VM_VOR_VV (VM_VAND_VX (ub, 0xffffffffULL, (vl)), \
+	       VM_VSLL_VX (VM_VOR_VX (hu, 0x3fe00000, (vl)), 32, (vl)), (vl)), \
+    VM_VOR_VV (VM_VAND_VX (ub, 0xffffffffULL, (vl)), \
+	       VM_VSLL_VX (VM_VOR_VX (hu, 0x3ff00000, (vl)), 32, (vl)), (vl)), \
+    m_hus, (vl)); \
+  vm_i64_t ki = VM_REINT_U_I (VM_VMERGE_VVM ( \
+    VM_VADD_VX (VM_REINT_I_U (kraw), 1, (vl)), \
+    VM_REINT_I_U (kraw), m_hus, (vl))); \
+  vm_f_t f = VM_VFSUB_VF (VM_FROM_BITS (unb), 1.0, (vl)); \
+  vm_f_t ff = VM_VFMUL_VV (f, f, (vl)); \
+  vm_f_t hfsq2 = VM_VFMUL_VF (VM_VFMUL_VF (ff, 0.5, (vl)), \
+			      VM_INVLN2_HI, (vl)); \
+  vm_f_t s = VM_VFDIV_VV (f, VM_VFADD_VF (f, 2.0, (vl)), (vl)); \
+  vm_f_t z = VM_VFMUL_VV (s, s, (vl)); \
+  vm_f_t R2 = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2_LP6, (vl)), VM_L2_LP7, z, (vl)); \
+  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP5, (vl)), z, R2, (vl)); \
+  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP4, (vl)), z, R2, (vl)); \
+  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP3, (vl)), z, R2, (vl)); \
+  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP2, (vl)), z, R2, (vl)); \
+  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP1, (vl)), z, R2, (vl)); \
+  R2 = VM_VFMUL_VV (z, R2, (vl)); \
+  vm_f_t X2 = VM_VFMUL_VV (s, VM_VFADD_VV (hfsq2, R2, (vl)), (vl)); \
+  /* f/ln2 correctly rounded (f2) with its exact residual te */ \
+  vm_b_t m_fl = VM_VMSGEU_VX ( \
+    VM_VAND_VX (VM_BITS (f), VM_ABSMASK_U64, (vl)), \
+    0x07b0000000000000ULL, (vl)); \
+  vm_f_t f2 = VM_VFMUL_VF (f, VM_INVLN2_HI, (vl)); \
+  f2 = VM_VFMACC_VF_M (m_fl, f2, VM_INVLN2_LO, f, (vl)); \
+  vm_f_t te = VM_VFMACC_VF_M (m_fl, VM_VFNEG_V (f2, (vl)), \
+			      VM_INVLN2_HI, f, (vl)); \
+  te = VM_VFMACC_VF_M (m_fl, te, VM_INVLN2_LO, f, (vl)); \
+  vm_f_t kd = VM_VFCVT_F_X_V (ki, (vl)); \
+  vm_f_t inner = VM_VFSUB_VV (hfsq2, X2, (vl)); \
+  /* k + log2(1+f) = k + f/ln2 - inner, tracked: \
+     u1 = inner - te; u2 = u1 - f2; y = kd - u2.  */ \
+  vm_f_t u1, u1e, u2, u2e, yB, yBe; \
+  VM_TWO_SUM (u1, u1e, inner, VM_VFNEG_V (te, (vl)), (vl)); \
+  VM_TWO_SUM (u2, u2e, u1, VM_VFNEG_V (f2, (vl)), (vl)); \
+  VM_TWO_SUM (yB, yBe, kd, VM_VFNEG_V (u2, (vl)), (vl)); \
+  yBe = VM_VFSUB_VV (VM_VFSUB_VV (yBe, u2e, (vl)), u1e, (vl)); \
+  (yh) = yB; \
+  (yl) = yBe; \
+} while (0)
+
 static inline vm_f_t
 VM_KFN (log2_k) (vm_f_t x, size_t vl, double (*fixup) (double))
 {
-  const struct vm_log2_data *D = &__vecmath_log2_data;
+  vm_f_t yh, yl;
   vm_u64_t ix = VM_BITS (x);
-  vm_u64_t top16 = VM_VSRL_VX (ix, 48, vl);
-  vm_b_t m_special = VM_VMSGEU_VX (VM_VSUB_VX (top16, 0x10, vl), 0x7fe0, vl);
-  vm_b_t m_near = VM_VMSLTU_VX (VM_VSUB_VX (ix, VM_LOG2_LO, vl),
-				VM_LOG2_HILO, vl);
-  vm_f_t xs = VM_VFMERGE_VFM (x, 1.0, m_special, vl);
-  vm_f_t xn = VM_VFMERGE_VFM (x, 1.0, VM_VMNOT_M (m_near, vl), vl);
-
-  /* ---- near-1 polynomial (LOG2_POLY1_ORDER 11) ---- */
-  vm_f_t r = VM_VFSUB_VF (xn, 1.0, vl);
-  vm_f_t hi = VM_VFMUL_VF (r, D->invln2hi, vl);
-  /* lo = r*InvLn2lo + fma(r, InvLn2hi, -hi) (fused chain like scalar).  */
-  vm_f_t lo = VM_VFMACC_VF (VM_VFMACC_VF (VM_VFNEG_V (hi, vl),
-					  D->invln2hi, r, vl),
-			    D->invln2lo, r, vl);
-  vm_f_t r2 = VM_VFMUL_VV (r, r, vl);
-  vm_f_t r4 = VM_VFMUL_VV (r2, r2, vl);
-  vm_f_t p = VM_VFMUL_VV (r2, VM_VFMACC_VF (VM_VFMV_V_F (D->poly1[0], vl),
-					    D->poly1[1], r, vl), vl);
-  vm_f_t yn = VM_VFADD_VV (hi, p, vl);
-  lo = VM_VFADD_VV (lo, VM_VFADD_VV (VM_VFSUB_VV (hi, yn, vl), p, vl), vl);
-  vm_f_t q = VM_VFMACC_VF (VM_VFMV_V_F (D->poly1[8], vl), D->poly1[9], r, vl);
-  vm_f_t q2 = VM_VFMACC_VF (VM_VFMV_V_F (D->poly1[6], vl), D->poly1[7], r, vl);
-  q2 = VM_VFMACC_VV (q2, r2, q, vl);
-  vm_f_t q1 = VM_VFMACC_VF (VM_VFMV_V_F (D->poly1[4], vl), D->poly1[5], r, vl);
-  vm_f_t q0 = VM_VFMACC_VF (VM_VFMV_V_F (D->poly1[2], vl), D->poly1[3], r, vl);
-  q0 = VM_VFMACC_VV (q0, r2, q1, vl);
-  q0 = VM_VFMACC_VV (q0, r4, q2, vl);
-  lo = VM_VFMACC_VV (lo, r4, q0, vl);
-  yn = VM_VFADD_VV (yn, lo, vl);
-
-  /* ---- main path ---- */
-  vm_u64_t ixb = VM_BITS (xs);
-  vm_u64_t tmp = VM_VSUB_VX (ixb, VM_LOG_OFF, vl);
-  vm_u64_t off = VM_VSLL_VX (VM_VAND_VX (VM_VSRL_VX (tmp, 46, vl), 63, vl),
-			     4, vl);
-  vm_f_t invc = VM_VLUXEI64 (&D->tab[0].invc, off, vl);
-  vm_f_t logc = VM_VLUXEI64 (&D->tab[0].logc, off, vl);
-  vm_i64_t k = VM_VSRA_VX (VM_REINT_U_I (tmp), 52, vl);
-  /* iz = ix - (tmp & 0xfff0000000000000): strip the exponent delta
-     (scalar writes `tmp & 0xfffULL << 52` -- the shift binds tighter,
-     so the mask applies to tmp's EXPONENT bits, not its low bits).  */
-  vm_u64_t iz = VM_VSUB_VV (ixb, VM_VAND_VX (tmp, 0xfff0000000000000ULL, vl),
-			    vl);
-  vm_f_t z = VM_FROM_BITS (iz);
-  vm_f_t kd = VM_VFCVT_F_X_V (k, vl);
-  r = VM_VFMACC_VV (VM_VFMV_V_F (-1.0, vl), invc, z, vl);
-  vm_f_t t1 = VM_VFMUL_VF (r, D->invln2hi, vl);
-  vm_f_t t2 = VM_VFMACC_VF (VM_VFMACC_VF (VM_VFNEG_V (t1, vl),
-					  D->invln2hi, r, vl),
-			    D->invln2lo, r, vl);
-  vm_f_t t3 = VM_VFADD_VV (kd, logc, vl);
-  hi = VM_VFADD_VV (t3, t1, vl);
-  lo = VM_VFADD_VV (VM_VFADD_VV (VM_VFSUB_VV (t3, hi, vl), t1, vl), t2, vl);
-  r2 = VM_VFMUL_VV (r, r, vl);
-  r4 = VM_VFMUL_VV (r2, r2, vl);
-  /* p = A0 + r*A1 + r2*(A2 + r*A3) + r4*(A4 + r*A5) */
-  p = VM_VFMACC_VF (VM_VFMV_V_F (D->poly[0], vl), D->poly[1], r, vl);
-  q = VM_VFMACC_VF (VM_VFMV_V_F (D->poly[2], vl), D->poly[3], r, vl);
-  q2 = VM_VFMACC_VF (VM_VFMV_V_F (D->poly[4], vl), D->poly[5], r, vl);
-  p = VM_VFMACC_VV (p, r2, q, vl);
-  p = VM_VFMACC_VV (p, r4, q2, vl);
-  /* y = (lo + r2*p) + hi */
-  vm_f_t ym = VM_VFADD_VV (VM_VFMACC_VV (lo, r2, p, vl), hi, vl);
-
-  vm_f_t y = VM_VFMERGE_VVM (ym, yn, m_near, vl);
-  return VM_KFN (scalar_fixup) (x, y, m_special, vl, fixup);
+  vm_u64_t top16 = VM_VSRL_VX (ix, 48, (vl));
+  vm_b_t m_spec = VM_VMSGEU_VX (VM_VSUB_VX (top16, 0x10, (vl)), 0x7fe0, (vl));
+  VM_LOG2_FD_CORE (yh, yl, x, vl);
+  return VM_KFN (scalar_fixup) (x, VM_VFADD_VV (yh, yl, (vl)), m_spec, vl,
+				fixup);
 }
+
 
 /* ------------------------------------------------------------------ */
 /* log1p(x) -- vectorization of fdlibm common/s_log1p.c.  All branches
@@ -441,19 +702,181 @@ VM_KFN (log1p_poly) (vm_f_t z, size_t vl)
   (yl) = VM_VFMERGE_VFM (vmlp__rl, 0.0, vmlp__dom, (vl));		\
 } while (0)
 
+/* ------------------------------------------------------------------ */
+/* Lean plain-double log1p (fdlibm s_log1p.c).  The final composition is
+   carried as a dd pair (a handful of error-free transforms) so log2p1
+   can scale it by 1/ln2 without paying an extra half-ulp rounding; the
+   log1p entry itself just collapses the pair.
+   Callers must hand in a finite x > -1 (special lanes go to scalar).  */
+#define VM_LOG1P_FAST(yh, yl, x, vl) do {				\
+  vm_u64_t vlp__bx = VM_BITS (x);					\
+  vm_i64_t vlp__hx = VM_VSRA_VX (VM_REINT_U_I (vlp__bx), 32, (vl));	\
+  vm_u64_t vlp__ab = VM_VAND_VX (vlp__bx, VM_ABSMASK_U64, (vl));	\
+  vm_b_t vlp__lt029 = VM_VMSLTU_VX (					\
+    VM_VAND_VX (VM_REINT_I_U (vlp__hx), 0x7fffffff, (vl)),		\
+    0x3e200000, (vl));							\
+  vm_b_t vlp__lt054 = VM_VMSLTU_VX (					\
+    VM_VAND_VX (VM_REINT_I_U (vlp__hx), 0x7fffffff, (vl)),		\
+    0x3c900000, (vl));							\
+  /* fdlibm's k = 0 region: -0.2929 < x < 0.41422 (and |x| < 2^-29)  */	\
+  vm_b_t vlp__midc = VM_VMSLT_VX (vlp__hx, 0x3fda827a, (vl));		\
+  vm_b_t vlp__c2 = VM_VMOR_MM (VM_VMSGT_VX (vlp__hx, 0, (vl)),		\
+    VM_VMSLE_VX (vlp__hx, (int64_t) (int32_t) 0xbfd2bec3, (vl)), (vl));	\
+  vm_b_t vlp__mid = VM_VMAND_MM (					\
+    VM_VMAND_MM (vlp__midc, vlp__c2, (vl)),				\
+    VM_VMNOT_M (vlp__lt029, (vl)), (vl));				\
+  vm_b_t vlp__mfx = VM_VMOR_MM (vlp__mid, vlp__lt029, (vl));		\
+  vm_b_t vlp__ge53 = VM_VMSGE_VX (vlp__hx, 0x43400000, (vl));		\
+  /* u = 1+x (x itself when x >= 2^53); c = exact residual of u.  */	\
+  vm_f_t vlp__u = VM_VFMERGE_VVM (VM_VFADD_VF (x, 1.0, (vl)), x,	\
+				  vlp__ge53, (vl));			\
+  vm_u64_t vlp__ub = VM_BITS (vlp__u);					\
+  vm_u64_t vlp__uh = VM_VSRL_VX (vlp__ub, 32, (vl));			\
+  vm_i64_t vlp__kraw = VM_REINT_U_I (					\
+    VM_VSUB_VX (VM_VSRL_VX (vlp__ub, 52, (vl)), 1023, (vl)));		\
+  vm_f_t vlp__cA = VM_VFRSUB_VF (					\
+    VM_VFSUB_VV (vlp__u, x, (vl)), 1.0, (vl));				\
+  vm_f_t vlp__cB = VM_VFSUB_VV (x, VM_VFSUB_VF (vlp__u, 1.0, (vl)), (vl)); \
+  vm_b_t vlp__kpos = VM_VMSGT_VX (vlp__kraw, 0, (vl));			\
+  vm_f_t vlp__c = VM_VFMERGE_VVM (vlp__cB, vlp__cA, vlp__kpos, (vl));	\
+  vlp__c = VM_VFMERGE_VFM (vlp__c, 0.0, vlp__ge53, (vl));		\
+  vlp__c = VM_VFDIV_VV (vlp__c, vlp__u, (vl));				\
+  /* normalize u to [1,2) or [0.5,1); hu is the high 20 mantissa bits */ \
+  vm_u64_t vlp__hu = VM_VAND_VX (vlp__uh, 0x000fffff, (vl));		\
+  vm_b_t vlp__hus = VM_VMSLTU_VX (vlp__hu, 0x6a09e, (vl));		\
+  vm_u64_t vlp__unb = VM_VMERGE_VVM (					\
+    VM_VOR_VV (VM_VAND_VX (vlp__ub, 0xffffffffULL, (vl)),		\
+	       VM_VSLL_VX (VM_VOR_VX (vlp__hu, 0x3fe00000, (vl)), 32, (vl)), (vl)), \
+    VM_VOR_VV (VM_VAND_VX (vlp__ub, 0xffffffffULL, (vl)),		\
+	       VM_VSLL_VX (VM_VOR_VX (vlp__hu, 0x3ff00000, (vl)), 32, (vl)), (vl)), \
+    vlp__hus, (vl));							\
+  vm_i64_t vlp__ki = VM_REINT_U_I (VM_VMERGE_VVM (			\
+    VM_VADD_VX (VM_REINT_I_U (vlp__kraw), 1, (vl)),			\
+    VM_REINT_I_U (vlp__kraw), vlp__hus, (vl)));				\
+  vm_f_t vlp__f = VM_VFSUB_VF (VM_FROM_BITS (vlp__unb), 1.0, (vl));	\
+  vlp__f = VM_VFMERGE_VVM (vlp__f, x, vlp__mfx, (vl));			\
+  /* hfsq = f*f/2 with its fma residual; |x| < 2^-54 lanes are parked
+     on a benign f so the square cannot underflow (they return x).  */	\
+  vm_f_t vlp__fh = VM_VFMERGE_VFM (vlp__f, 0.5, vlp__lt054, (vl));	\
+  vm_f_t vlp__ff = VM_VFMUL_VV (vlp__fh, vlp__fh, (vl));		\
+  vm_f_t vlp__hfsq = VM_VFMUL_VF (vlp__ff, 0.5, (vl));			\
+  vm_f_t vlp__hfsqe = VM_VFMUL_VF (					\
+    VM_VFNEG_V (VM_VFNMSAC_VV (vlp__ff, vlp__fh, vlp__fh, (vl)), (vl)),	\
+    0.5, (vl));								\
+  vm_f_t vlp__s = VM_VFDIV_VV (vlp__fh, VM_VFADD_VF (vlp__fh, 2.0, (vl)), (vl)); \
+  vm_f_t vlp__z = VM_VFMUL_VV (vlp__s, vlp__s, (vl));			\
+  vm_f_t vlp__X = VM_VFMUL_VV (vlp__s,					\
+    VM_VFADD_VV (vlp__hfsq,						\
+		 VM_VFMUL_VV (vlp__z,					\
+			      VM_KFN (log1p_poly) (vlp__z, (vl)), (vl)), (vl)), (vl)); \
+  /* k-path lanes with hu == 0 (|f| < 2^-20): fdlibm swaps the role of
+     hfsq for R = hfsq*(1-(2/3)f) and drops the s*(...) term.  */	\
+  vm_f_t vlp__hfsqr = vlp__hfsq;					\
+  {									\
+    vm_b_t vlp__hu0 = VM_VMAND_MM (					\
+      VM_VMSEQ_VX (vlp__hu, 0, (vl)),					\
+      VM_VMNOT_M (vlp__mfx, (vl)), (vl));				\
+    vm_f_t vlp__R2 = VM_VFMUL_VV (vlp__hfsq,				\
+      VM_VFMACC_VF (VM_VFMV_V_F (1.0, (vl)), -0.66666666666666666,	\
+		    vlp__fh, (vl)), (vl));				\
+    vlp__hfsqr = VM_VFMERGE_VVM (vlp__hfsq, vlp__R2, vlp__hu0, (vl));	\
+    vlp__X = VM_VFMERGE_VFM (vlp__X, 0.0, vlp__hu0, (vl));		\
+  }									\
+  /* fdlibm's tiny ladder returns x - x*x/2, i.e. X = 0.  */		\
+  vlp__X = VM_VFMERGE_VFM (vlp__X, 0.0, vlp__lt029, (vl));		\
+  vm_f_t vlp__kd = VM_VFCVT_F_X_V (vlp__ki, (vl));			\
+  vm_f_t vlp__khi = VM_VFMUL_VF (vlp__kd, VM_LN2_HI_L1P, (vl));		\
+  vm_f_t vlp__kc = VM_VFMACC_VF (vlp__c, VM_LN2_LO_L1P, vlp__kd, (vl));	\
+  /* k == 0 shape: y = f - (hfsq - X), tracked, hfsq's residual folded. */ \
+  vm_f_t vlp__i, vlp__ie, vlp__yA, vlp__yAe;				\
+  VM_TWO_SUM (vlp__i, vlp__ie, vlp__hfsqr, VM_VFNEG_V (vlp__X, (vl)), (vl)); \
+  VM_TWO_SUM (vlp__yA, vlp__yAe, vlp__f, VM_VFNEG_V (vlp__i, (vl)), (vl)); \
+  vlp__yAe = VM_VFSUB_VV (VM_VFSUB_VV (vlp__yAe, vlp__ie, (vl)),		\
+			  vlp__hfsqe, (vl));				\
+  /* k != 0 shape: y = k*ln2_hi - ((hfsq - (X + klo_c)) - f), tracked.  */ \
+  vm_f_t vlp__s1, vlp__s1e, vlp__s2, vlp__s2e, vlp__t2, vlp__t2e;	\
+  VM_TWO_SUM (vlp__s1, vlp__s1e, vlp__X, vlp__kc, (vl));		\
+  VM_TWO_SUM (vlp__s2, vlp__s2e, vlp__hfsqr, VM_VFNEG_V (vlp__s1, (vl)), (vl)); \
+  VM_TWO_SUM (vlp__t2, vlp__t2e, vlp__s2, VM_VFNEG_V (vlp__f, (vl)), (vl)); \
+  {									\
+    vm_f_t vlp__yB, vlp__yBe;						\
+    VM_TWO_SUM (vlp__yB, vlp__yBe, vlp__khi, VM_VFNEG_V (vlp__t2, (vl)), (vl)); \
+    vlp__yBe = VM_VFSUB_VV (						\
+      VM_VFSUB_VV (VM_VFADD_VV (vlp__yBe, vlp__s1e, (vl)),		\
+		   vlp__t2e, (vl)), vlp__s2e, (vl));			\
+    vlp__yBe = VM_VFSUB_VV (vlp__yBe, vlp__hfsqe, (vl));		\
+    (yh) = VM_VFMERGE_VVM (vlp__yB, vlp__yA, vlp__mfx, (vl));		\
+    (yl) = VM_VFMERGE_VVM (vlp__yBe, vlp__yAe, vlp__mfx, (vl));		\
+  }									\
+  /* |x| < 2^-54: exactly x.  */						\
+  (yh) = VM_VFMERGE_VVM ((yh), x, vlp__lt054, (vl));			\
+  (yl) = VM_VFMERGE_VFM ((yl), 0.0, vlp__lt054, (vl));			\
+} while (0)
+
+/* Special-lane mask for log1p/log2p1: x <= -1 (invalid / divbyzero) or
+   non-finite (inf, NaN).  */
+#define VM_LOG1P_SPEC_M(x, vl, mo) do {					\
+  vm_u64_t vls__b = VM_BITS (x);					\
+  vm_i64_t vls__h = VM_VSRA_VX (VM_REINT_U_I (vls__b), 32, (vl));	\
+  vm_u64_t vls__a = VM_VAND_VX (vls__b, VM_ABSMASK_U64, (vl));		\
+  (mo) = VM_VMOR_MM (							\
+    VM_VMAND_MM (VM_VMSLT_VX (vls__h, 0, (vl)),				\
+		 VM_VMSGEU_VX (vls__a, 0x3ff0000000000000ULL, (vl)), (vl)), \
+    VM_VMSGEU_VX (vls__a, 0x7ff0000000000000ULL, (vl)), (vl));		\
+} while (0)
+
 static inline vm_f_t
 VM_KFN (log1p_k) (vm_f_t x, size_t vl, double (*fixup) (double))
 {
-  vm_f_t yh, yl;
-  VM_LOG1P_DD (yh, yl, x, vl, fixup);
-  vm_f_t y;
+  vm_b_t m_spec;
+  VM_LOG1P_SPEC_M (x, vl, m_spec);
+  vm_f_t xs = VM_VFMERGE_VFM (x, 0.5, m_spec, vl);
+  vm_f_t yh, yl, y;
+  VM_LOG1P_FAST (yh, yl, xs, vl);
   VM_DD_COLLAPSE (y, yh, yl, vl);
-  /* +-0 inputs: log1p(+-0) = +-0; the dd collapse (-0 + 0) would give
-     +0.  (Fixup lanes are never zero.)  */
-  return VM_VFMERGE_VVM (y, x, VM_VMFEQ_VF (x, 0.0, vl), vl);
+  /* log1p(+-0) = +-0.  */
+  y = VM_VFMERGE_VVM (y, x, VM_VMFEQ_VF (x, 0.0, vl), vl);
+  return VM_KFN (scalar_fixup) (x, y, m_spec, vl, fixup);
 }
 
-/* ------------------------------------------------------------------ */
+/* Multiply the dd (ah, al) by the dd constant (ch, cl) -- 1/ln2 here --
+   and collapse to one correctly rounded double.  Both parts are scaled
+   by 2^900 first: the dd corrections are ~2^-53 of the product and
+   unscaled would underflow on lanes whose answer is normal.  The final
+   rounding happens once, on the scaled pair; a subnormal or zero result
+   is always inexact (log2(1+x) is irrational for every rational
+   x != 0), so UNDERFLOW is raised explicitly there -- the scaled
+   product sometimes lands exactly on the subnormal grid and stays
+   silent.  */
+#define VM_LOG_MUL_DD_CONST(y, ah, al, ch, cl, vl) do {			\
+  vm_f_t vlq__hs = VM_VFMUL_VF ((ah), 0x1p900, (vl));			\
+  vm_f_t vlq__ls = VM_VFMUL_VF ((al), 0x1p900, (vl));			\
+  vm_f_t vlq__p = VM_VFMUL_VF (vlq__hs, (ch), (vl));			\
+  vm_f_t vlq__e = VM_VFMACC_VF (VM_VFNEG_V (vlq__p, (vl)), (ch),	\
+				 vlq__hs, (vl));			\
+  vlq__e = VM_VFMACC_VF (vlq__e, (cl), vlq__hs, (vl));			\
+  vlq__e = VM_VFMACC_VF (vlq__e, (ch), vlq__ls, (vl));			\
+  vm_f_t vlq__s, vlq__se;						\
+  VM_TWO_SUM (vlq__s, vlq__se, vlq__p, vlq__e, (vl));			\
+  VM_DD_COLLAPSE ((y), vlq__s, vlq__se, (vl));			\
+  (y) = VM_VFMUL_VF ((y), 0x1p-900, (vl));				\
+  {									\
+    vm_u64_t vlq__yb = VM_VAND_VX (VM_BITS (y), VM_ABSMASK_U64, (vl));	\
+    vm_u64_t vlq__hb = VM_VAND_VX (VM_BITS (ah), VM_ABSMASK_U64, (vl));	\
+    vm_b_t vlq__mu = VM_VMAND_MM (					\
+      VM_VMSLTU_VX (vlq__yb, 0x0010000000000000ULL, (vl)),		\
+      VM_VMSNE_VX (vlq__hb, 0, (vl)), (vl));				\
+    vm_f_t vlq__uf = VM_VFMUL_VF_MU (vlq__mu, VM_VFMV_V_F (0.0, (vl)),	\
+				     VM_VFMV_V_F (0x1p-1022, (vl)),	\
+				     0x1p-1022, (vl));			\
+    (y) = VM_VFADD_VV_MU (vlq__mu, (y), (y), vlq__uf, (vl));		\
+  }									\
+  /* exact zeros keep the sign of the dd */				\
+  (y) = VM_VFMERGE_VVM ((y), VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, (vl)), (ah), \
+					    (vl)),			\
+			VM_VMFEQ_VF ((y), 0.0, (vl)), (vl));		\
+} while (0)
+
 /* log10(x) = log(x) * log10(e), scaled as dd before the final rounding.
    fixup must be scalar log(); the dd scale preserves the fixup's
    +-inf/NaN results (log10e > 0).  */
@@ -476,65 +899,96 @@ VM_KFN (log10) (vm_f_t x, size_t vl, double (*fixup) (double))
 }
 
 /* ------------------------------------------------------------------ */
-/* log2p1(x) = log2(1+x) (SYCL): dd(log1p) * (1/ln2) before the final
-   rounding -- never forms 1+x, accurate as x -> 0.  fixup: scalar
-   log1p() (divzero at -1, invalid below; the scale by 1/ln2 > 0
-   preserves +-inf/NaN pass-through).  */
+/* log2p1(x) = log2(1+x): the fdlibm log2 core runs on the rounded
+   u = 1+x and the exact rounding residual c = x-(u-1) adds the tail
+   c*ln2(e)/u (1/u from the linear mantissa estimate, max 12.5% on [1,2)
+   -- the tail is at most 2^-24 of the answer once |x| >= 2^-29, so that
+   is four orders below an ulp).  The core's dd pair is kept, so the
+   final add is one correctly rounded rounding.
+   fixup must be scalar log1p() -- it agrees with log2p1 on every special
+   lane (-inf at -1, NaN below it, +inf at +inf).  */
+/* Rare-lane rescue for log2p1, deliberately out of line: the generic
+   scalar_fixup carries 300-double buffers whose frame would otherwise be
+   charged to every strip of the hot loop.  */
+__attribute__ ((noinline)) static vm_f_t
+VM_KFN (log2p1_fixup) (vm_f_t x, vm_f_t y, vm_b_t m, size_t vl,
+		       double (*fn) (double))
+{
+  return VM_KFN (scalar_fixup) (x, y, m, vl, fn);
+}
+
+/* Scalar log2p1 for the fixup lanes: log2(1+x) agrees with log2p1 on
+   every special lane (-inf at -1, NaN below it, +inf at inf) and is the
+   plain scalar answer for the rare huge lanes the kernel hands off.  */
+#ifndef VM_LOG2P1_SCALAR_DEFINED
+#define VM_LOG2P1_SCALAR_DEFINED
+static inline double
+vm_log2p1_scalar (double x)
+{
+  return (log2) (1.0 + x);
+}
+#endif
+#define log2p1_scalar vm_log2p1_scalar
+
 static inline vm_f_t
 VM_KFN (log2p1) (vm_f_t x, size_t vl, double (*fixup) (double))
 {
-  vm_f_t lph, lpl;
-  VM_LOG1P_DD (lph, lpl, x, vl, fixup);
-  vm_u64_t cls = VM_VFCLASS_V (lph, vl);
-  vm_b_t m_fin = VM_VMSNE_VX (VM_VAND_VX (cls, VM_CLS_FINITE, vl), 0, vl);
-  /* tiny lane scaling: for |lp| < 2^-960 the dd cross terms would be
-     subnormal (spurious FE_UNDERFLOW); scale the dd pair by 2^60 (exact,
-     both parts normal there) and undo after the collapse.  */
-  vm_u64_t abl = VM_VAND_VX (VM_BITS (lph), VM_ABSMASK_U64, vl);
-  vm_b_t m_tiny = VM_VMSLTU_VX (abl, 0x03f0000000000000ULL, vl);
-  m_tiny = VM_VMAND_MM (m_tiny, m_fin, vl);
-  vm_b_t m_dir = VM_VMAND_MM (VM_VMNOT_M (m_tiny, vl), m_fin, vl);
-  /* direct dd path */
-  vm_f_t lphs = VM_VFMERGE_VFM (lph, 1.0, VM_VMNOT_M (m_dir, vl), vl);
-  vm_f_t lpls = VM_VFMERGE_VFM (lpl, 0.0, VM_VMNOT_M (m_dir, vl), vl);
-  vm_f_t dh, dl;
-  VM_DD_MUL (dh, dl, lphs, lpls,
-	     VM_VFMV_V_F (VM_INVLN2_HI, vl), VM_VFMV_V_F (VM_INVLN2_LO, vl),
-	     vl);
-  vm_f_t ydir;
-  VM_DD_COLLAPSE (ydir, dh, dl, vl);
-  /* scaled dd path */
-  vm_f_t tsh = VM_VFMERGE_VFM (VM_VFMUL_VF (lph, 0x1p60, vl), 1.0,
-			       VM_VMNOT_M (m_tiny, vl), vl);
-  vm_f_t tsl = VM_VFMERGE_VFM (VM_VFMUL_VF (lpl, 0x1p60, vl), 0.0,
-			       VM_VMNOT_M (m_tiny, vl), vl);
-  VM_DD_MUL (dh, dl, tsh, tsl,
-	     VM_VFMV_V_F (VM_INVLN2_HI, vl), VM_VFMV_V_F (VM_INVLN2_LO, vl),
-	     vl);
-  vm_f_t ysc;
-  VM_DD_COLLAPSE (ysc, dh, dl, vl);
-  ysc = VM_VFMUL_VF (ysc, 0x1p-60, vl);
-  vm_f_t y = VM_VFMERGE_VVM (ydir, ysc, m_tiny, vl);
-  /* +-0 results keep their sign (dd +0 adds would lose -0).  */
-  y = VM_VFMERGE_VVM (y, VM_VFMUL_VF (lph, VM_INVLN2_HI, vl),
-		      VM_VMFEQ_VF (lph, 0.0, vl), vl);
-  /* Underflow for tiny results: the 2^-60-scaled path can round to a
-     value exactly on the subnormal grid although the true value is not
-     representable, so the hardware never sets UF.  Raise it for
-     0 < |y| < DBL_MIN lanes -- x/ln2 is not representable on that
-     grid, so those results are always inexact.  The masked multiply
-     keeps the flag on exactly those lanes and the masked add keeps the
-     computation live without changing y (2^-2044 flushes to +-0).  */
+  /* log2(1+x) = log2(u) + c/(u*ln2), u = RN(1+x), c = x-(u-1) exact.
+     The log2 core works in log2 units already, so the only correction is
+     the c/u tail folded by 1/ln2; it lands in the core's dd low part and
+     the sum rounds once.  The tail is at most 2^-24 of the answer for
+     |x| >= 2^-29, and below that u is within an ulp of 1 where the
+     linear-mantissa 1/u estimate is exact, so its 12.5% worst case is
+     orders of magnitude below an ulp.  */
+  vm_b_t m_spec;
+  VM_LOG1P_SPEC_M (x, vl, m_spec);
+  vm_f_t xs = VM_VFMERGE_VFM (x, 0.5, m_spec, vl);
+
+  /* u = RN(1+xs), c = xs-(u-1) its exact residual (exact for u < 2;
+     above that it is below 2^-53/|answer|).  */
+  vm_f_t u = VM_VFADD_VF (xs, 1.0, (vl));
+  vm_f_t c = VM_VFSUB_VV (xs, VM_VFSUB_VF (u, 1.0, (vl)), (vl));
+
+  /* The c/u tail first, so only one live group crosses the log2 core and
+     the register allocator does not spill the contraction.  */
+  vm_f_t cu;
   {
-    vm_u64_t yb = VM_VAND_VX (VM_BITS (y), VM_ABSMASK_U64, vl);
-    vm_b_t m_uf = VM_VMSLTU_VX (VM_VSUB_VX (yb, 1, vl),
-				0x000fffffffffffffULL, vl);
-    /* _MU: the _m form's inactive lanes are unspecified for
-       two-operand results.  */
-    vm_f_t uf = VM_VFMUL_VF_MU (m_uf, VM_VFMV_V_F (0.0, vl),
-				VM_VFMV_V_F (0x1p-1022, vl), 0x1p-1022, vl);
-    y = VM_VFADD_VV_MU (m_uf, y, y, uf, vl);
+    vm_u64_t ub = VM_BITS (u);
+    vm_f_t mant = VM_FROM_BITS (VM_VOR_VX (
+      VM_VAND_VX (ub, 0x000fffffffffffffULL, (vl)),
+      0x3ff0000000000000ULL, (vl)));
+    vm_u64_t i2e = VM_VSLL_VX (
+      VM_VSUB_VV (VM_VMV_V_X (2046, (vl)),
+		  VM_VSRL_VX (ub, 52, (vl)), (vl)), 52, (vl));
+    vm_f_t lin = VM_VFNMSAC_VF (VM_VFMV_V_F (1.5, (vl)), 0.5, mant, (vl));
+    cu = VM_VFMUL_VF (
+      VM_VFMUL_VV (c, VM_VFMUL_VV (lin, VM_FROM_BITS (i2e), (vl)), (vl)),
+      VM_INVLN2_HI, (vl));
   }
-  /* non-finite log1p results pass through (1/ln2 > 0).  */
-  return VM_VFMERGE_VVM (lph, y, m_fin, vl);
+  vm_f_t yh, yl;
+  VM_LOG2_FD_CORE (yh, yl, u, vl);
+  {
+    vm_f_t y = VM_VFADD_VV (yh, VM_VFADD_VV (yl, cu, (vl)), (vl));
+    /* A nonzero subnormal answer is always inexact (log2(1+x) is
+       irrational for rational x != 0) and must raise UNDERFLOW; the
+       product above can land exactly on the subnormal grid, so raise it
+       with a masked flush-to-zero multiply.  */
+    {
+      vm_u64_t yb = VM_VAND_VX (VM_BITS (y), VM_ABSMASK_U64, (vl));
+      vm_b_t m_uf = VM_VMAND_MM (
+	VM_VMAND_MM (VM_VMSLTU_VX (yb, 0x0010000000000000ULL, (vl)),
+		     VM_VMSNE_VX (yb, 0, (vl)), (vl)),
+	VM_VMSNE_VX (VM_VAND_VX (VM_BITS (x), VM_ABSMASK_U64, (vl)),
+		     0, (vl)), (vl));
+      vm_f_t uf = VM_VFMUL_VF_MU (m_uf, VM_VFMV_V_F (0.0, (vl)),
+				  VM_VFMV_V_F (0x1p-1022, (vl)),
+				  0x1p-1022, (vl));
+      y = VM_VFADD_VV_MU (m_uf, y, y, uf, (vl));
+    }
+    /* log2p1(+-0) = +-0.  */
+    y = VM_VFMERGE_VVM (y, x, VM_VMFEQ_VF (x, 0.0, (vl)), vl);
+    if (VM_VFIRST_M (m_spec, vl) < 0)
+      return y;
+    return VM_KFN (log2p1_fixup) (x, y, m_spec, vl, fixup);
+  }
 }

@@ -15,7 +15,6 @@
 #include <vecmath_dd.h>
 #include "vecmath_local.h"
 #include <k_exp.inc>
-#include <k_expm1.inc>
 
 #define VM32_LMUL 2
 #include <f32/compat.h>

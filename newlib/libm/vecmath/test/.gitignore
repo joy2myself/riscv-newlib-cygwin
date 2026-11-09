@@ -9,3 +9,4 @@
 /shim/
 
 # results/ is NOT ignored: the accuracy reports under it are checked in.
+/.build/

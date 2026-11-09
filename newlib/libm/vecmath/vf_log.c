@@ -1,7 +1,9 @@
 /* vf_log.c -- binary32 array API entries for the logarithm family.
 
    Part of the newlib RISC-V vector math library (libvecmath); see
-   <vecmath.h> for the API contract.  */
+   <vecmath.h> for the API contract.  The native binary32 kernels keep
+   their own per-lane scalar epilogue, so this translation unit no longer
+   needs the binary64 layer.  */
 
 #include <vecmath.h>
 
@@ -9,12 +11,6 @@
 
 #include <riscv_vector.h>
 #include <math.h>
-
-#define VM_LMUL 4
-#include <vecmath_rvvcompat.h>
-#include <vecmath_dd.h>
-#include "vecmath_local.h"
-#include <k_log.inc>
 
 #define VM32_LMUL 2
 #include <f32/compat.h>
@@ -50,7 +46,7 @@ vlog10f (float *__restrict y, const float *__restrict x, size_t n)
   for (size_t avl = n; avl > 0; avl -= vl, x += vl, y += vl)
     {
       vl = VM32_VSETVL (avl);
-      VM32_VSE (y, VM32_KFN (log10) (VM32_VLE (x, vl), vl, log), vl);
+      VM32_VSE (y, VM32_KFN (log10) (VM32_VLE (x, vl), vl, log10), vl);
     }
 }
 

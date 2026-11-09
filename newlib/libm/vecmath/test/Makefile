@@ -49,7 +49,7 @@ RUNHDRS := $(wildcard $(TESTDIR)/include/*.h) $(wildcard $(TESTDIR)/include/*.de
 QEMU_VLENS  ?= 128 256 512 1024
 SPIKE_VLENS ?= 128 256 1024
 
-.PHONY: all blobs-small blobs-full run-qemu run-qemu-small run-qemu-system run-spike clean results
+.PHONY: all blobs-small blobs-full run-qemu run-qemu-small run-qemu-system run-spike clean results bench
 all: vmgen runner-linux
 
 vmgen: $(TESTDIR)/gen/vmgen.c $(TESTDIR)/include/vmblob.h $(TESTDIR)/include/vmfuncs.def
@@ -65,6 +65,11 @@ blobs-full: vmgen
 
 runner-linux: $(RUNSRCS) $(VECSRCS) $(RUNHDRS) $(VECHDRS) $(TESTDIR)/shim/vecmath.h
 	$(CROSS_LINUX) -O2 -static $(ARCH) $(DEFS) $(INCS) -o $@ $(RUNSRCS) $(VECSRCS) -lm
+
+# Throughput benchmark (cross build).  Run it on a real RVV board with
+# scripts/bench-board.sh, which also serializes board access.
+bench: $(TESTDIR)/bench/bench.c $(VECSRCS) $(VECHDRS) $(TESTDIR)/shim/vecmath.h
+	$(TESTDIR)/scripts/build.sh default bench
 
 runner-elf: $(RUNSRCS) $(VECSRCS) $(RUNHDRS) $(VECHDRS) $(TESTDIR)/shim/vecmath.h
 	$(CROSS_ELF) -O2 $(ARCH) $(DEFS) $(INCS) -o $@ $(RUNSRCS) $(VECSRCS) \

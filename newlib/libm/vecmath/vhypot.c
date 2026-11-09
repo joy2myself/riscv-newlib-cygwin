@@ -12,7 +12,7 @@
 #include <riscv_vector.h>
 #include <math.h>
 
-#define VM_LMUL 2
+#define VM_LMUL 4
 #include <vecmath_rvvcompat.h>
 #include <vecmath_dd.h>
 #include "vecmath_local.h"
