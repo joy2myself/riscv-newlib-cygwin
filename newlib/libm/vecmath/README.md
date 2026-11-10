@@ -292,6 +292,20 @@ so the split is exact and the results are unchanged.
   binary64 kernel (they are already 1.5-7x, so there was nothing to win).
   The kernel *interface* is element-generic (`include/f32/`), so
   converting the rest is local.
+* **The gamma fast path is 1.27-1.54 ulp on its own band.** `lgamma`,
+  `lgamma_r` and `tgamma` dispatch per strip: a strip whose lanes all lie
+  in [0.5, 8) runs the compact fast path, anything else runs the full
+  double-double kernel.  The FULL MPFR tier passes at <= 1 ulp, but
+  `scripts/domain-check.sh` -- which filters the blobs to that band so
+  only the fast path runs -- measures 1.27 ulp (tgamma), 1.41 (lgamma)
+  and 1.54 (lgamma_r) on ~0.2% of the band's lanes.  The residual is the
+  fdlibm term's evaluation plus the one rounding of the final sum: the
+  result there is a difference of two moderate terms (about 2x relative
+  error amplification), so the term needs double-double *polynomial
+  evaluation*, not just a double-double combine.  Doing that was measured
+  at +9 to +42 ns/element per entry, which costs the fast path more than
+  the accuracy is worth in the shipped contract (the framework gate is
+  the FULL tier), so it stays documented rather than paid for.
 * **The `erfc` tail used to be the one entry under parity; it is 1.24x
   now.** Its 1.25 <= |x| band is a single serial dependency chain per
   strip (argument pair, exp pair, tail factor, dd multiply, dd divide),
