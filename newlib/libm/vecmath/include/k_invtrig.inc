@@ -110,7 +110,13 @@
    tail of x (zero vector for plain atan).  fdlibm s_atan.c; the final
    composition hi - ((r*S - lo) - r) is evaluated with error-free
    transforms so the pair carries ~106 bits.  */
-#define VM_ATAN_DD(yh, yl, x, xlo, vl) do {				\
+/* fastq is a compile-time flag: the standalone atan/atanpi kernels pass 1
+   and get the single-reciprocal quotient, where it is a clear win at
+   LMUL 1-2 (and only there -- above LMUL 2 the extra live vector costs
+   more than the division it saves, measured on both RVV boards).
+   atan2/atan2pi inline the atan core with a non-zero tail and keep the
+   two-division form, which schedules better in that larger expression.  */
+#define VM_ATAN_DD(yh, yl, x, xlo, vl, fastq) do {				\
   vm_u64_t vma__bx = VM_BITS (x);					\
   vm_i64_t vma__hx = VM_VSRA_VX (VM_REINT_U_I (vma__bx), 32, (vl));	\
   vm_u64_t vma__ix = VM_VAND_VX (VM_REINT_I_U (vma__hx), 0x7fffffff, (vl)); \
@@ -145,12 +151,31 @@
   vm_f_t vma__rden = VM_VFMERGE_VVM (					\
     VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), vma__c, vma__ag, (vl)),	\
     vma__ag, vma__m3, (vl));						\
-  vm_f_t vma__r = VM_VFDIV_VV (vma__rnum, vma__rden, (vl));		\
-  /* exact residual of that division; without it one rounding of r is
-     lost from every result.  */					\
-  vm_f_t vma__rr = VM_VFDIV_VV (					\
-    VM_VFNMSAC_VV (vma__rnum, vma__r, vma__rden, (vl)),			\
-    vma__rden, (vl));							\
+  /* One reciprocal serves both divisions at LMUL 1-2: r = rnum*rt and \
+     the residual (rnum - r*rden)*rt.  The 2^-600 scale keeps the \
+     reciprocal in range even for rden = |x| on the -1/ag branch (up to \
+     the largest finite double), and the Newton residual absorbs the \
+     extra rounding, so the dd pair is as accurate as a true dd divide. \
+     Above LMUL 2 the extra live vector costs more than the division it \
+     saves, so those instantiations keep two true divisions.  */ \
+  vm_f_t vma__r, vma__rr; \
+  if ((fastq) && VM_LMUL <= 2) \
+    { \
+      vm_f_t vq__rt = VM_VFRDIV_VF ( \
+        VM_VFMUL_VF (vma__rden, 0x1p-600, (vl)), 1.0, (vl)); \
+      vq__rt = VM_VFMUL_VF (vq__rt, 0x1p-600, (vl)); \
+      vma__r = VM_VFMUL_VV (vma__rnum, vq__rt, (vl)); \
+      vma__rr = VM_VFMUL_VV ( \
+        VM_VFNMSAC_VV (vma__rnum, vma__r, vma__rden, (vl)), \
+        vq__rt, (vl)); \
+    } \
+  else \
+    { \
+      vma__r = VM_VFDIV_VV (vma__rnum, vma__rden, (vl)); \
+      vma__rr = VM_VFDIV_VV ( \
+        VM_VFNMSAC_VV (vma__rnum, vma__r, vma__rden, (vl)), \
+        vma__rden, (vl)); \
+    } \
   /* tail: dr/dx = (1+r^2)/(1+x^2) for every branch of the reduction.  */ \
   vm_f_t vma__rlo = VM_VFMUL_VV (					\
     (xlo), VM_VFDIV_VV (						\
@@ -231,7 +256,7 @@
 
 /* atan(x) as a dd pair without any tail term.  */
 #define VM_ATAN_ONLY_DD(yh, yl, x, vl)					\
-  VM_ATAN_DD ((yh), (yl), (x), VM_VFMV_V_F (0.0, (vl)), (vl))
+  VM_ATAN_DD ((yh), (yl), (x), VM_VFMV_V_F (0.0, (vl)), (vl), 1)
 
 /* ------------------------------------------------------------------ */
 /* atan2(y, x) as a dd pair.  fdlibm e_atan2.c with the quotient's own
@@ -339,7 +364,7 @@
     VM_VMSLTU_VX (vma2__qab, 0x07b0000000000000ULL, (vl)),		\
     VM_VMNOT_M (VM_VMOR_MM (vma2__mspec, vma2__mxs, (vl)), (vl)), (vl)); \
   vm_f_t vma2__azh, vma2__azl;						\
-  VM_ATAN_DD (vma2__azh, vma2__azl, vma2__aq, vma2__atail, (vl));	\
+  VM_ATAN_DD (vma2__azh, vma2__azl, vma2__aq, vma2__atail, (vl), 0);	\
   /* |q| > 2^60: pi/2 (fdlibm substitutes pi_o_2 + 0.5*pi_lo).  */	\
   vma2__azh = VM_VFMERGE_VFM (vma2__azh, VM_ATAN2_PIO2, vma2__mhi, (vl)); \
   vma2__azl = VM_VFMERGE_VFM (vma2__azl, 0.0, vma2__mhi, (vl));	\
