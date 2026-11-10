@@ -47,7 +47,13 @@ vlgamma_r (double *__restrict y, int *__restrict sign,
       VM_GAM_LGAMMA_R (h, l, s, VM_VLE64 (x, vl), vl);
       VM_DD_COLLAPSE (vres, h, l, vl);
       VM_VSE64 (y, vres, vl);
-      si = VM_VFCVT_X_F_V_RM (s, __RISCV_FRM_RTZ, vl);
+      /* s is exactly +-1.0, so the sign fits straight out of its sign
+         bit: 0x3ff0... >> 63 is 0 and 0xbff0... >> 63 is -1, and ORing 1
+         gives +1 / -1 without touching the rounding mode (a vfcvt with an
+         explicit frm costs an fsrm/fsrmi pair around the strip).  */
+      si = VM_REINT_U_I (VM_VOR_VX (
+	VM_REINT_I_U (VM_VSRA_VX (VM_REINT_U_I (VM_BITS (s)), 63, (vl))),
+	1, (vl)));
       VM_VSE32 (sign, VM_VNCVT_X_X_W (si, vl), vl);
     }
 }
