@@ -48,7 +48,8 @@
 /* (oh, ol) = 1/(eh + el), ~2^-105 relative; |eh| >= 1 so no division by
    zero or overflow.  */
 #define VM_HYP_INVDD(oh, ol, eh, el, vl) do {				\
-  vm_f_t vhi_r = VM_VFRDIV_VF ((eh), 1.0, (vl));			\
+  vm_f_t vhi_r;								\
+  VM_RCP_FULL (vhi_r, (eh), (vl));					\
   vm_f_t vhi_e = VM_VFNMSAC_VV (VM_VFMV_V_F (1.0, (vl)), vhi_r, (eh), (vl)); \
   (oh) = vhi_r;								\
   (ol) = VM_VFMUL_VV (							\
@@ -59,7 +60,8 @@
    (reciprocal of dh refined by the exact residual; dh > 0, no div by
    zero).  */
 #define VM_HYP_DIVDD(qh, ql, nh, nl, dh, dl, vl) do {			\
-  vm_f_t vhq_r = VM_VFRDIV_VF ((dh), 1.0, (vl));			\
+  vm_f_t vhq_r;								\
+  VM_RCP_FULL (vhq_r, (dh), (vl));					\
   vm_f_t vhq_e = VM_VFNMSAC_VV (VM_VFMV_V_F (1.0, (vl)), vhq_r, (dh), (vl)); \
   vhq_r = VM_VFMACC_VV (vhq_r, vhq_r, vhq_e, (vl));			\
   (qh) = VM_VFMUL_VV ((nh), vhq_r, (vl));				\
