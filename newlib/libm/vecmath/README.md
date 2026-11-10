@@ -136,57 +136,57 @@ Every one of the 82 entries is within 1 ulp (no lane over 1 ulp, no
 special-class failure, no per-lane flag failure, sweep-stable across
 strip lengths, and identical at every VLEN), and all 82 are faster than
 the scalar baseline. The mean speedup is 3.06x; the slowest entry is
-`erf` at 1.06x and the fastest `sqrtf` at 7.04x.
+`atan2pi` at 1.11x and the fastest `sqrtf` at 7.3x.
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrt | 0.5000 | 4.45x | asin | 0.6383 | 2.10x |
-| rsqrt | 0.8612 | 2.97x | acos | 0.6409 | 1.93x |
-| cbrt | 0.6645 | 3.53x | atan | 0.5927 | 1.32x |
-| exp | 0.5030 | 4.08x | atan2 | 0.7242 | 1.36x |
-| exp2 | 0.5038 | 3.71x | asinpi | 1.0000 | 1.87x |
-| exp10 | 0.5034 | 3.74x | acospi | 0.6624 | 1.76x |
-| expm1 | 0.8130 | 2.01x | atanpi | 1.0000 | 1.29x |
-| log | 0.7290 | 2.23x | atan2pi | 1.0000 | 1.10x |
+| sqrt | 0.5000 | 4.46x | asin | 0.6383 | 2.11x |
+| rsqrt | 0.8612 | 2.98x | acos | 0.6409 | 1.92x |
+| cbrt | 0.6645 | 3.55x | atan | 0.5927 | 1.32x |
+| exp | 0.5030 | 4.01x | atan2 | 0.7242 | 1.36x |
+| exp2 | 0.5038 | 3.46x | asinpi | 1.0000 | 1.87x |
+| exp10 | 0.5034 | 3.84x | acospi | 0.6624 | 1.75x |
+| expm1 | 0.8130 | 2.00x | atanpi | 1.0000 | 1.29x |
+| log | 0.7290 | 2.24x | atan2pi | 1.0000 | 1.11x |
 | log2 | 0.6888 | 1.77x | sinh | 0.6446 | 4.17x |
 | log10 | 0.9091 | 2.83x | cosh | 0.5645 | 2.97x |
-| log1p | 0.5890 | 2.12x | tanh | 0.5230 | 3.45x |
+| log1p | 0.5890 | 2.13x | tanh | 0.5230 | 3.44x |
 | log2p1 | 1.0000 | 1.38x | asinh | 0.9076 | 1.68x |
-| pow | 0.5053 | 3.43x | acosh | 0.9352 | 1.64x |
+| pow | 0.5053 | 3.42x | acosh | 0.9352 | 1.64x |
 | sin | 0.7852 | 2.69x | atanh | 0.9885 | 2.37x |
-| cos | 0.7846 | 2.55x | hypot | 0.5000 | 2.39x |
-| tan | 0.7376 | 2.35x | erf | 1.0000 | 1.06x |
-| sincos | 0.8345 | 4.09x | erfc | 0.8440 | 1.24x |
-| sinpi | 1.0000 | 2.70x | tgamma | 1.0000 | 2.59x |
-| cospi | 0.8067 | 2.50x | lgamma | 0.8505 | 1.25x |
-| tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.24x |
+| cos | 0.7846 | 2.56x | hypot | 0.5000 | 2.39x |
+| tan | 0.7376 | 2.34x | erf | 1.0000 | 1.40x |
+| sincos | 0.8345 | 3.89x | erfc | 0.8440 | 1.24x |
+| sinpi | 1.0000 | 2.70x | tgamma | 1.0000 | 3.27x |
+| cospi | 0.8067 | 2.52x | lgamma | 0.8505 | 1.38x |
+| tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.45x |
 | sincospi | 1.0000 | 3.73x |  | |  |
 
 The binary32 entries:
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrtf | 0.5000 | 7.04x | asinf | 0.8136 | 3.34x |
-| rsqrtf | 0.5000 | 2.15x | acosf | 0.8893 | 4.32x |
-| cbrtf | 0.5000 | 1.47x | atanf | 0.8238 | 4.52x |
-| expf | 0.5257 | 6.19x | atan2f | 0.5000 | 1.47x |
-| exp2f | 0.5000 | 3.45x | asinpif | 0.8055 | 3.46x |
-| exp10f | 0.5000 | 3.50x | acospif | 0.5000 | 1.46x |
-| expm1f | 0.6321 | 4.80x | atanpif | 0.8251 | 5.09x |
-| logf | 0.5106 | 2.88x | atan2pif | 0.5000 | 1.81x |
-| log2f | 0.5340 | 2.84x | sinhf | 0.6741 | 5.81x |
-| log10f | 0.5279 | 5.50x | coshf | 0.5365 | 6.35x |
-| log1pf | 0.5796 | 3.39x | tanhf | 0.6855 | 3.22x |
-| log2p1f | 0.5523 | 2.27x | asinhf | 0.5238 | 2.84x |
-| powf | 0.5000 | 2.30x | acoshf | 0.5055 | 3.80x |
-| sinf | 0.5812 | 3.05x | atanhf | 0.5362 | 4.42x |
-| cosf | 0.5812 | 3.09x | hypotf | 0.5000 | 4.10x |
-| tanf | 0.6537 | 3.67x | erff | 0.5005 | 1.53x |
-| sincosf | 0.5916 | 4.31x | erfcf | 0.5312 | 1.68x |
-| sinpif | 0.5802 | 3.11x | tgammaf | 0.5002 | 6.73x |
-| cospif | 0.5627 | 2.44x | lgammaf | 0.5011 | 4.80x |
-| tanpif | 0.6965 | 3.73x | lgamma_rf | 0.5011 | 3.88x |
-| sincospif | 0.6040 | 4.60x |  | |  |
+| sqrtf | 0.5000 | 7.02x | asinf | 0.8136 | 3.33x |
+| rsqrtf | 0.5000 | 2.15x | acosf | 0.8893 | 4.28x |
+| cbrtf | 0.5000 | 1.46x | atanf | 0.8238 | 4.52x |
+| expf | 0.5257 | 6.24x | atan2f | 0.5000 | 1.47x |
+| exp2f | 0.5000 | 3.41x | asinpif | 0.8055 | 3.46x |
+| exp10f | 0.5000 | 3.47x | acospif | 0.5000 | 1.44x |
+| expm1f | 0.6321 | 4.79x | atanpif | 0.8251 | 5.09x |
+| logf | 0.5106 | 2.88x | atan2pif | 0.5000 | 1.82x |
+| log2f | 0.5340 | 2.78x | sinhf | 0.6741 | 5.79x |
+| log10f | 0.5279 | 5.42x | coshf | 0.5365 | 6.34x |
+| log1pf | 0.5796 | 3.32x | tanhf | 0.6855 | 3.29x |
+| log2p1f | 0.5523 | 2.23x | asinhf | 0.5238 | 2.84x |
+| powf | 0.5000 | 2.30x | acoshf | 0.5055 | 3.81x |
+| sinf | 0.5812 | 3.04x | atanhf | 0.5362 | 4.40x |
+| cosf | 0.5812 | 3.07x | hypotf | 0.5000 | 4.10x |
+| tanf | 0.6537 | 3.65x | erff | 0.5005 | 1.53x |
+| sincosf | 0.5916 | 4.30x | erfcf | 0.5312 | 1.67x |
+| sinpif | 0.5802 | 3.11x | tgammaf | 0.5002 | 6.72x |
+| cospif | 0.5627 | 2.44x | lgammaf | 0.5011 | 4.86x |
+| tanpif | 0.6965 | 3.71x | lgamma_rf | 0.5011 | 3.87x |
+| sincospif | 0.6040 | 4.61x |  | |  |
 
 Starred entries reach exactly 1.0 ulp, which the contract admits: they
 round twice, once at 53-bit precision in a scaled domain and then onto
@@ -223,6 +223,32 @@ lanes), or they are `exp` of a very large `lgamma` (`tgamma`).
 * `log2p1` is built as `log2(RN(1+x)) + c/(u ln2)` on the log2 core's dd
   pair, so the 1/ln2 scaling costs no extra rounding; its hot path is a
   leaf with the fixup behind a `vfirst` branch.
+
+## A second RVV board (a210, VLEN 128)
+
+The same tree was built and measured on a second RVV 1.0 board: a210
+(8x RVV 128-bit, glibc 2.41, native GCC 14.2). Accuracy: **82/82 PASS**
+at the SMALL tier (2 059 records per function), no class/sweep/flag
+failures -- same contract as the VLEN 256 board. Per-run reports are in
+`test/results/board-a210/`.
+
+The speedups are structurally smaller there, for two reasons: the vector
+unit is half as wide (VLEN 128, so a strip covers half as many lanes)
+while its scalar FPU is roughly twice as fast per element, so the scalar
+baseline is much stronger. Measured mean is 2.73x with 11 of 82 entries
+at or under 1.0x when built natively with GCC 14.2
+(`test/results/board-a210/bench-a210-gcc14.md`).
+
+The result is also sensitive to the compiler: the same source built with
+GCC 15.1 (the cross compiler used for the VLEN 256 numbers) averages
+2.27x with 15 entries at or under 1.0x on that board
+(`bench-a210-gcc15.md`), but wins back others (e.g. `atan2` 0.30x ->
+1.03x). Per-entry code generation for RVV still moves by 2-3x between
+GCC 14 and 15 on this core, which is worth knowing before tuning for it.
+The entries that stay under parity regardless of compiler are the
+128-bit-lane-bound ones (`atan`, `atanpi`, `atan2pi`, `atan2f`, `log2p1`,
+`erfc`, `asinh`, `hypot`), all of which are the long-dependency-chain
+kernels: at VLEN 128 a strip has half the lanes to hide the chain behind.
 
 ## VFABI aliases
 
