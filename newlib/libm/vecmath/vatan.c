@@ -1,4 +1,7 @@
-/* vatan.c -- array API entries for atan / atan2 / atanpi / atan2pi.
+/* vatan.c -- array API entries for atan / atan2 / atanpi and the
+   asin/acos family.  atan2pi lives in its own translation unit because it
+   wants LMUL 2 (its dd /pi tail spills at LMUL 1) while the rest of the
+   family is faster at LMUL 1 on the VLEN 128 board.  
 
    Part of the newlib RISC-V vector math library (libvecmath); see
    <vecmath.h> for the API contract.  */
@@ -10,7 +13,7 @@
 #include <riscv_vector.h>
 #include <math.h>
 
-#define VM_LMUL 2
+#define VM_LMUL 1
 #include <vecmath_rvvcompat.h>
 #include <vecmath_dd.h>
 #include "vecmath_local.h"
@@ -93,24 +96,6 @@ vacospi (double *__restrict y, const double *__restrict x, size_t n)
     {
       vl = VM_VSETVL (avl);
       VM_VSE64 (y, VM_KFN (acospi) (VM_VLE64 (x, vl), vl), vl);
-    }
-}
-
-/* vatan2pi needs the quotient tail even where the quotient itself is
-   subnormal: the core holds those lanes' dd pair at 2^600 and this entry
-   hands it straight to the /pi, dividing the scale out after.  See
-   VM_ATAN2_CORE_DD in k_invtrig.inc.  */
-
-void
-vatan2pi (double *__restrict y, const double *__restrict ay,
-	  const double *__restrict ax, size_t n)
-{
-  size_t vl;
-  for (size_t avl = n; avl > 0; avl -= vl, ay += vl, ax += vl, y += vl)
-    {
-      vl = VM_VSETVL (avl);
-      VM_VSE64 (y, VM_KFN (atan2pi) (VM_VLE64 (ay, vl), VM_VLE64 (ax, vl), vl),
-		vl);
     }
 }
 

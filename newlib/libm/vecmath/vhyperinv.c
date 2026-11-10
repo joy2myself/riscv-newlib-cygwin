@@ -10,7 +10,7 @@
 #include <riscv_vector.h>
 #include <math.h>
 
-#define VM_LMUL 2	/* native LMUL for the log kernels.  */
+#define VM_LMUL 1	/* native LMUL for the log kernels.  */
 #include <vecmath_rvvcompat.h>
 #include <vecmath_dd.h>
 #include "vecmath_local.h"

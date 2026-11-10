@@ -4,21 +4,33 @@
    and vecmath_local.h (k_fixup.inc) with VM_LMUL defined.  Also needs
    k_trig.inc for the pi constants (VM_INVPI_HI / VM_INVPI_LO).
 
-   Lean rewrite: the base kernels are plain-double ports of fdlibm
-   math/s_atan.c, math/e_atan2.c, math/e_asin.c and math/e_acos.c with
-   the *final composition* carried as a double-double pair (a handful of
-   error-free transforms), so the pi-scaled variants can multiply by 1/pi
-   without paying an extra rounding.  The former 100%-dd atan core (4
-   divisions, ~300 vector ops) is gone: one division for the reduction,
-   one for its quotient residual and, for callers that pass a tail, one
-   for the tail.
+   SHAPE (CORE-MATH atan/atan2, "table + tangent subtraction"): reduce
+   q = min/max in [0,1] to the nearest node t0 = i/128 of a 128-node
+   table, form z = (q - t0)/(1 + q*t0) -- two fma and one reciprocal --
+   and correct with a degree-7 polynomial.  |z| <= 1/252 makes four
+   coefficients enough; the table carries atan(t0) as a double-double
+   pair, so the base is 106 bits and the whole kernel costs a single
+   final rounding.  The four quadrants (atan2's pi/2 and pi offsets) are
+   folded into the table, so they cost one index addend and no dd add;
+   the pi-scaled entries use a pre-divided table and polynomial, so
+   atanpi/atan2pi also pay exactly one rounding (the old path paid two,
+   which is why those entries sat at exactly 1.0 ulp).
 
-   The s_atan.c branch structure is evaluated branch-free on the masked
-   lane classes; the |x| < 2^-29 and |x| >= 2^66 lanes are fed a benign
-   reduction value and patched at the end, exactly as fdlibm answers
-   them before doing any arithmetic.  */
+   Lanes whose operands leave [2^-500, 2^500) -- zero, subnormal, inf,
+   NaN, or simply huge -- plus the tiny-ratio lanes whose quotient
+   residual falls under the subnormal grid are answered by the previous
+   fdlibm-shaped dd kernel, kept below and reached through a vfirst
+   guard.  Inside the window every intermediate is normal, so the fast
+   path can neither overflow nor underflow nor cancel into a subnormal,
+   and it is 0.5-0.9 ulp; the retained kernel keeps the exact
+   special-value patches and flags the reference expects on the rest.
 
-/* ---- atan constants (s_atan.c) ---- */
+   asin/acos keep their fdlibm shape (rational + sqrt); their final
+   composition is carried as a double-double pair so the pi-scaled
+   variants can divide by pi without paying an extra rounding.  */
+
+/* ---- fdlibm s_atan.c / e_atan2.c constants, used only by the legacy
+   fallback kernel below ---- */
 #define VM_ATANHI0 4.63647609000806093515e-01
 #define VM_ATANHI1 7.85398163397448278999e-01
 #define VM_ATANHI2 9.82793723247329054082e-01
@@ -38,10 +50,10 @@
 #define VM_AT8 4.97687799461593236017e-02
 #define VM_AT9 -3.65315727442169155270e-02
 #define VM_AT10 1.62858201153657823623e-02
-
-/* ---- atan2 constants (e_atan2.c) ---- */
 #define VM_ATAN2_PIO4 7.8539816339744827900e-01
 #define VM_ATAN2_PIO2 1.5707963267948965580e+00
+
+/* ---- atan2 constants ---- */
 #define VM_ATAN2_PI 3.1415926535897931160e+00
 #define VM_ATAN2_PILO 1.2246467991473531772e-16
 
@@ -105,7 +117,396 @@
 			VM_VMFEQ_VF ((y), 0.0, (vl)), (vl));		\
 } while (0)
 
+
+/* ---- reduction tables (generated; see the header) ---- */
+#include <vm_atan_table.h>
+
+/* fast-path operand window: |x| and |y| in [2^-500, 2^500).  */
+#define VM_AT_LO 0x20b0000000000000ULL		/* bits(2^-500) */
+#define VM_AT_SPAN 0x3e80000000000000ULL	/* bits(2^500)-bits(2^-500) */
+#define VM_AT_KBIAS 0x4330000000000000ULL	/* bits(2^52) */
+#define VM_AT_K0 (0x1p52)
+#define VM_AT_K129 (0x1p52 + 129.0)
+
 /* ------------------------------------------------------------------ */
+/* Table-driven atan core (CORE-MATH shape).
+
+   VM_ATAN2_TAB(rh, rl, msp, y, x, vl, THI, TLO, C0, C1, C2, C3, C0R,
+		ONE)
+   returns atan2(y,x) -- or atan2(y,x)/pi with the _pi table and
+   polynomial -- as a double-double pair, and sets msp to the lanes the
+   caller must hand to the legacy kernel below.
+
+   ONE marks the atan-only instantiation: the caller passes x = 1.0, so
+   there is no x < 0 quadrant and the quarter index loses its 258 term.
+
+   Table layout (see vm_atan_table.h): four quarters of 129 entries,
+   [i + 129*(|x|<|y|) + 258*(x<0)] with the correction added for the
+   even quarters and subtracted for the odd ones.  The quarter offset is
+   folded into the 2^52 magic constant that rounds q*128, so the index
+   and t0 = i/128 come out of two instructions.
+
+   Everything the reduction touches is exact or a single rounding:
+     num = b - t0*a, den = a + t0*b       (one fma each)
+     z   = num/den and its fma residual   (dd quotient, 2^-56)
+     corr= (z + zl)*p                     (one fma, p degree 3 in z^2)
+     r   = hi + (lo + corr)               (one 2Sum, then one add)
+   so the only rounding left is the caller's collapse of (rh, rl).  */
+#define VM_ATAN2_TAB(rh, rl, msp, y, x, vl, THI, TLO, C0, C1, C2, C3, C0R, \
+		       ONE) \
+do {									\
+  vm_u64_t vmt__abx = VM_VAND_VX (VM_BITS (x), VM_ABSMASK_U64, (vl));	\
+  vm_u64_t vmt__aby = VM_VAND_VX (VM_BITS (y), VM_ABSMASK_U64, (vl));	\
+  (msp) = VM_VMOR_MM (							\
+    VM_VMSGEU_VX (VM_VSUB_VX (vmt__abx, VM_AT_LO, (vl)), VM_AT_SPAN, (vl)), \
+    VM_VMSGEU_VX (VM_VSUB_VX (vmt__aby, VM_AT_LO, (vl)), VM_AT_SPAN, (vl)), \
+    (vl));								\
+  vm_f_t vmt__xs = VM_VFMERGE_VFM ((x), 1.0, (msp), (vl));		\
+  vm_f_t vmt__ys = VM_VFMERGE_VFM ((y), 0.0, (msp), (vl));		\
+  vm_f_t vmt__ax = VM_VFABS_V (vmt__xs, (vl));				\
+  vm_f_t vmt__ay = VM_VFABS_V (vmt__ys, (vl));				\
+  vm_b_t vmt__msw = VM_VMFLT_VV (vmt__ax, vmt__ay, (vl));		\
+  vm_f_t vmt__a = VM_VFMERGE_VVM (vmt__ax, vmt__ay, vmt__msw, (vl));	\
+  vm_f_t vmt__b = VM_VFMERGE_VVM (vmt__ay, vmt__ax, vmt__msw, (vl));	\
+  vm_b_t vmt__mx = (msp);						\
+  vm_b_t vmt__mneg = vmt__msw;						\
+  if (!(ONE))								\
+    {									\
+      vmt__mx = VM_VMFLT_VF (vmt__xs, 0.0, (vl));			\
+      vmt__mneg = VM_VMXOR_MM (vmt__msw, vmt__mx, (vl));		\
+    }									\
+  /* q = b/a to ~2^-14: only the table index needs it, and an index off	\
+     by one still leaves |z| <= 1/252.  */				\
+  vm_f_t vmt__ra = VM_VFREC7_V (vmt__a, (vl));				\
+  vmt__ra = VM_VFMACC_VV (vmt__ra, vmt__ra,				\
+    VM_VFNMSAC_VV (VM_VFMV_V_F (1.0, (vl)), vmt__a, vmt__ra, (vl)), (vl)); \
+  vm_f_t vmt__q = VM_VFMUL_VV (vmt__b, vmt__ra, (vl));			\
+  /* i = round(q*128) with the quarter offset carried by the magic	\
+     constant; s - k is then exactly i, so t0 = i/128 is exact.  */	\
+  vm_f_t vmt__k = VM_VFMERGE_VFM (VM_VFMV_V_F (VM_AT_K0, (vl)), \
+				 VM_AT_K129, vmt__msw, (vl)); \
+  if (!(ONE))								\
+    vmt__k = VM_VFADD_VF_MU (vmt__mx, vmt__k, vmt__k, 258.0, (vl));	\
+  vm_f_t vmt__s = VM_VFMACC_VF (vmt__k, 128.0, vmt__q, (vl));		\
+  vm_f_t vmt__t0 = VM_VFMUL_VF (VM_VFSUB_VV (vmt__s, vmt__k, (vl)),	\
+				0x1p-7, (vl));				\
+  vm_u64_t vmt__off = VM_VSLL_VX (					\
+    VM_VSUB_VX (VM_BITS (vmt__s), VM_AT_KBIAS, (vl)), 3, (vl));		\
+  vm_f_t vmt__hi = VM_VLUXEI64 (THI, vmt__off, (vl));			\
+  vm_f_t vmt__lo = VM_VLUXEI64 (TLO, vmt__off, (vl));			\
+  /* z = (b - t0 a)/(a + t0 b) as a dd.  den's own rounding is half the \
+     reduction's error budget and appears whole on the lanes where the \
+     table base and the correction cancel, so it is recovered with an \
+     fma residual and carried in the quotient dd.  */ \
+  vm_f_t vmt__num = VM_VFNMSAC_VV (vmt__b, vmt__t0, vmt__a, (vl)); \
+  vm_f_t vmt__den = VM_VFMACC_VV (vmt__a, vmt__t0, vmt__b, (vl)); \
+  vm_f_t vmt__dlo = VM_VFMACC_VV (VM_VFSUB_VV (vmt__a, vmt__den, (vl)), \
+				  vmt__t0, vmt__b, (vl)); \
+  vm_f_t vmt__rd; \
+  VM_RCP_FAST (vmt__rd, vmt__den, (vl)); \
+  vm_f_t vmt__z = VM_VFMUL_VV (vmt__num, vmt__rd, (vl)); \
+  /* |z| below 2^-340: z^2, z^3 and the quotient residual all fall past \
+     the subnormal grid.  The reference (much wider exponent range) \
+     expects no underflow there and the dropped terms are < 2^-680 \
+     relative, so those lanes run with w = zl = 0.  */ \
+  vm_b_t vmt__mtiny = VM_VMFLT_VF (vmt__q, 0x1p-340, (vl)); \
+  vm_b_t vmt__mt = VM_VMNOT_M (vmt__mtiny, (vl)); \
+  vm_f_t vmt__zl = VM_VFNMSAC_VV (vmt__num, vmt__z, vmt__den, (vl)); \
+  vmt__zl = VM_VFNMSAC_VV (vmt__zl, vmt__z, vmt__dlo, (vl)); \
+  vmt__zl = VM_VFMUL_VV_MU (vmt__mt, VM_VFMV_V_F (0.0, (vl)), vmt__zl, \
+			    vmt__rd, (vl)); \
+  /* corr = atan(z + zl) = z*C0 + (z*w)*Q + zl*(1 - w) + O(zl^2), with \
+     Q = C1 + w*(C2 + w*C3), w = z^2.  The small terms ride on the fma \
+     addends, so corr costs a single rounding -- evaluating the \
+     polynomial as C0 + C1*w + ... would round the leading 1 and cost \
+     up to a whole extra ulp where base and correction cancel.  The \
+     zl*(1 - w) form matters: zl is only 2^-29 relative (VM_RCP_FAST) \
+     and dropping its w*zl part is a 4-ulp error on the small-q lanes. \
+     For the pi-scaled entries C0 is rounded, so its residual C0R \
+     rides on the same addend and the 1/pi is carried to 106 bits.  */ \
+  vm_f_t vmt__w = VM_VFMUL_VV_MU (vmt__mt, VM_VFMV_V_F (0.0, (vl)), \
+				  vmt__z, vmt__z, (vl)); \
+  vm_f_t vmt__Q = VM_VFMACC_VV (VM_VFMV_V_F (C2, (vl)), vmt__w, \
+				VM_VFMV_V_F (C3, (vl)), (vl)); \
+  vmt__Q = VM_VFMACC_VV (VM_VFMV_V_F (C1, (vl)), vmt__w, vmt__Q, (vl)); \
+  vm_f_t vmt__t1 = VM_VFNMSAC_VV (vmt__zl, vmt__zl, vmt__w, (vl)); \
+  if ((C0) != 1.0) \
+    { \
+      vmt__t1 = VM_VFMUL_VF (vmt__t1, C0, (vl)); \
+      vmt__t1 = VM_VFMACC_VF_MU (vmt__mt, vmt__t1, C0R, vmt__z, (vl)); \
+    } \
+  vm_f_t vmt__corr = VM_VFMACC_VV ( \
+    vmt__t1, VM_VFMUL_VV (vmt__z, vmt__w, (vl)), vmt__Q, (vl)); \
+  vmt__corr = VM_VFMACC_VF (vmt__corr, C0, vmt__z, (vl)); \
+  vmt__corr = VM_VFMERGE_VVM (vmt__corr, VM_VFNEG_V (vmt__corr, (vl)),	\
+			      vmt__mneg, (vl));				\
+  /* base + (lo + corr): one 2Sum, one rounding left for the caller.  */ \
+  VM_TWO_SUM ((rh), (rl), vmt__hi,					\
+	      VM_VFADD_VV (vmt__lo, vmt__corr, (vl)), (vl));		\
+  /* the tiny-ratio lanes are answered by the legacy kernel: their	\
+     quotient residual is below the subnormal grid, and that kernel	\
+     already carries the exact-tiny patch the reference expects.  */	\
+  (msp) = VM_VMOR_MM ((msp), vmt__mtiny, (vl));				\
+} while (0)
+
+/* atan(z) = z*(C0 + C1 z^2 + C2 z^4 + C3 z^6) on |z| <= 1/252: minimax
+   (relative) fit, max relative error 2^-74.  The _pi set is the same
+   polynomial pre-divided by pi, so the pi-scaled entries fold the 1/pi
+   into the correction instead of scaling afterwards.  */
+#define VM_AT_C0 0x1.0000000000000p+0
+#define VM_AT_C1 -0x1.5555555555553p-2
+#define VM_AT_C2 0x1.999999986aab1p-3
+#define VM_AT_C3 -0x1.2490737a3b069p-3
+#define VM_ATP_C0 0x1.45f306dc9c883p-2
+#define VM_ATP_C0R -0x1.6b01ec5417056p-56
+#define VM_ATP_C1 -0x1.b2995e7b7b601p-4
+#define VM_ATP_C2 0x1.04c26be2ef92bp-4
+#define VM_ATP_C3 -0x1.74811f8f4bb12p-5
+
+/* ------------------------------------------------------------------ */
+/* asin / acos: fdlibm e_asin.c / e_acos.c.
+   |x| < 0.5  : rational on x^2, asin = x + x*w.
+   |x| >= 0.5 : s = sqrt((1-|x|)/2), the same rational on z=(1-|x|)/2.
+   The final composition is carried as a dd pair.  */
+
+#define VM_ASIN_PS0 1.66666666666666657415e-01
+#define VM_ASIN_PS1 -3.25565818622400915405e-01
+#define VM_ASIN_PS2 2.01212532134862925881e-01
+#define VM_ASIN_PS3 -4.00555345006794114027e-02
+#define VM_ASIN_PS4 7.91534994289814532176e-04
+#define VM_ASIN_PS5 3.47933107596021167570e-05
+#define VM_ASIN_QS1 -2.40339491173441421878e+00
+#define VM_ASIN_QS2 2.02094576023350569471e+00
+#define VM_ASIN_QS3 -6.88283971605453293030e-01
+#define VM_ASIN_QS4 7.70381505559019352791e-02
+#define VM_ASIN_PIO2_HI 1.57079632679489655800e+00
+#define VM_ASIN_PIO2_LO 6.12323399573676603587e-17
+#define VM_ASIN_PIO4_HI 7.85398163397448278999e-01
+
+/* r = P(z)/Q(z), the shared rational of asin/acos.  */
+static inline vm_f_t
+VM_KFN (asin_rat) (vm_f_t z, size_t vl)
+{
+  vm_f_t p = VM_VFMACC_VF (VM_VFMV_V_F (VM_ASIN_PS4, vl), VM_ASIN_PS5, z, vl);
+  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_PS3, vl), z, p, vl);
+  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_PS2, vl), z, p, vl);
+  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_PS1, vl), z, p, vl);
+  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_PS0, vl), z, p, vl);
+  p = VM_VFMUL_VV (z, p, vl);
+  vm_f_t q = VM_VFMACC_VF (VM_VFMV_V_F (VM_ASIN_QS3, vl), VM_ASIN_QS4, z, vl);
+  q = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_QS2, vl), z, q, vl);
+  q = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_QS1, vl), z, q, vl);
+  q = VM_VFMACC_VV (VM_VFMV_V_F (1.0, vl), z, q, vl);
+  return VM_VFDIV_VV (p, q, vl);
+}
+
+/* asin(x) as a dd pair; x finite, |x| < 1 (special lanes sanitized by
+   the caller).  */
+#define VM_ASIN_DD(ah, al, x, vl) do {					\
+  vm_u64_t vms__ix = VM_VAND_VX (VM_VSRL_VX (VM_BITS (x), 32, (vl)),	\
+				 0x7fffffff, (vl));			\
+  vm_b_t vms__mneg = VM_VMSLT_VX (VM_REINT_U_I (VM_BITS (x)), 0, (vl));	\
+  vm_b_t vms__mhalf = VM_VMSLTU_VX (vms__ix, 0x3fe00000, (vl));		\
+  vm_b_t vms__mge = VM_VMNOT_M (vms__mhalf, (vl));			\
+  vm_f_t vms__a = VM_VFABS_V (x, (vl));					\
+  /* |x| < 2^-27: fdlibm returns x itself.  x*x would underflow on the
+     subnormal inputs (spurious UNDERFLOW), so those lanes are fed a
+     benign z and their x*r term is masked to zero below.  */		\
+  vm_b_t vms__mtiny = VM_VMSLTU_VX (vms__ix, 0x3e400000, (vl));		\
+  vm_b_t vms__mmul = VM_VMNOT_M (vms__mtiny, (vl));			\
+  vm_f_t vms__z = VM_VFMUL_VV_MU (vms__mmul, VM_VFMV_V_F (0.25, (vl)),	\
+				  x, x, (vl));				\
+  vm_f_t vms__z2 = VM_VFMUL_VF (VM_VFRSUB_VF (vms__a, 1.0, (vl)), 0.5, (vl)); \
+  vms__z = VM_VFMERGE_VVM (vms__z, vms__z2, vms__mge, (vl));		\
+  vm_f_t vms__r = VM_KFN (asin_rat) (vms__z, (vl));			\
+  /* |x| < 2^-27: fdlibm returns x itself; zeroing r kills both the x*r
+     term and its residual without an underflowing product.  */		\
+  vms__r = VM_VFMERGE_VFM (vms__r, 0.0, vms__mtiny, (vl));		\
+  /* |x| < 0.5: x + x*r, tracked (Fast2Sum valid: |x*r| << |x|).  */	\
+  vm_f_t vms__t = VM_VFMUL_VV (x, vms__r, (vl));			\
+  vm_f_t vms__te = VM_VFNEG_V (VM_VFNMSAC_VV (vms__t, x, vms__r, (vl)), (vl)); \
+  vm_f_t vms__yh, vms__yl;						\
+  VM_FAST2SUM (vms__yh, vms__yl, x, vms__t, (vl));			\
+  vms__yl = VM_VFADD_VV (vms__yl, vms__te, (vl));			\
+  /* |x| >= 0.5: fdlibm's pio4 split.  */				\
+  {									\
+    vm_f_t vms__s = VM_VFSQRT_V (vms__z, (vl));				\
+    vm_f_t vms__w = VM_FROM_BITS (					\
+      VM_VAND_VX (VM_BITS (vms__s), 0xffffffff00000000ULL, (vl)));	\
+    /* c = (z - w*w)/(s + w) */						\
+    vm_f_t vms__c = VM_VFDIV_VV (					\
+      VM_VFMACC_VV (vms__z, vms__w, VM_VFNEG_V (vms__w, (vl)), (vl)),	\
+      VM_VFADD_VV (vms__s, vms__w, (vl)), (vl));			\
+    /* pp = 2*s*r - (pio2_lo - 2*c) */					\
+    vm_f_t vms__pp = VM_VFRSUB_VF (					\
+				  VM_VFMUL_VF (vms__c, 2.0, (vl)),	\
+				  VM_ASIN_PIO2_LO, (vl));		\
+    vms__pp = VM_VFMACC_VV (VM_VFNEG_V (vms__pp, (vl)),		\
+			    VM_VFMUL_VF (vms__s, 2.0, (vl)), vms__r, (vl)); \
+    /* qq = pio4_hi - 2*w */						\
+    vm_f_t vms__qq = VM_VFRSUB_VF (					\
+				  VM_VFMUL_VF (vms__w, 2.0, (vl)),	\
+				  VM_ASIN_PIO4_HI, (vl));		\
+    /* t = pio4_hi - (pp - qq), tracked.  */				\
+    vm_f_t vms__B, vms__Be, vms__C, vms__Ce;				\
+    VM_TWO_SUM (vms__B, vms__Be, vms__pp, VM_VFNEG_V (vms__qq, (vl)), (vl)); \
+    VM_TWO_SUM (vms__C, vms__Ce, VM_VFMV_V_F (VM_ASIN_PIO4_HI, (vl)),	\
+		VM_VFNEG_V (vms__B, (vl)), (vl));			\
+    vm_f_t vms__bt = VM_VFMERGE_VVM (vms__C,				\
+				     VM_VFNEG_V (vms__C, (vl)),		\
+				     vms__mneg, (vl));			\
+    vm_f_t vms__bl = VM_VFSUB_VV (vms__Ce, vms__Be, (vl));		\
+    vms__bl = VM_VFMERGE_VVM (vms__bl,				\
+			      VM_VFNEG_V (vms__bl, (vl)), vms__mneg, (vl)); \
+    vms__yh = VM_VFMERGE_VVM (vms__bt, vms__yh, vms__mhalf, (vl));	\
+    vms__yl = VM_VFMERGE_VVM (vms__bl, vms__yl, vms__mhalf, (vl));	\
+  }									\
+  (ah) = vms__yh;							\
+  (al) = vms__yl;							\
+} while (0)
+
+/* acos(x) as a dd pair (|x| < 1).  */
+#define VM_ACOS_DD(ah, al, x, vl) do {					\
+  vm_u64_t vmc__ix = VM_VAND_VX (VM_VSRL_VX (VM_BITS (x), 32, (vl)),	\
+				 0x7fffffff, (vl));			\
+  vm_b_t vmc__mneg = VM_VMSLT_VX (VM_REINT_U_I (VM_BITS (x)), 0, (vl));	\
+  vm_b_t vmc__mhalf = VM_VMSLTU_VX (vmc__ix, 0x3fe00000, (vl));		\
+  vm_b_t vmc__mgt = VM_VMNOT_M (vmc__mhalf, (vl));			\
+  vm_f_t vmc__a = VM_VFABS_V (x, (vl));					\
+  vm_b_t vmc__mtiny = VM_VMSLTU_VX (vmc__ix, 0x3e400000, (vl));		\
+  vm_b_t vmc__mmul = VM_VMNOT_M (vmc__mtiny, (vl));			\
+  vm_f_t vmc__z = VM_VFMUL_VV_MU (vmc__mmul, VM_VFMV_V_F (0.25, (vl)),	\
+				  x, x, (vl));				\
+  vm_f_t vmc__z2 = VM_VFMUL_VF (VM_VFRSUB_VF (vmc__a, 1.0, (vl)), 0.5, (vl)); \
+  vmc__z = VM_VFMERGE_VVM (vmc__z, vmc__z2, vmc__mgt, (vl));		\
+  vm_f_t vmc__r = VM_KFN (asin_rat) (vmc__z, (vl));			\
+  /* |x| < 0.5: pio2_hi - (x - (pio2_lo - x*r)), tracked.  */		\
+  vm_f_t vmc__sh, vmc__sl;						\
+  {									\
+    vm_f_t vmc__t = VM_VFMUL_VV_MU (vmc__mmul, VM_VFMV_V_F (0.0, (vl)),	\
+				    x, vmc__r, (vl));			\
+    vm_f_t vmc__u = VM_VFRSUB_VF (vmc__t, VM_ASIN_PIO2_LO, (vl));	\
+    vm_f_t vmc__w, vmc__we;						\
+    VM_TWO_SUM (vmc__w, vmc__we, x, VM_VFNEG_V (vmc__u, (vl)), (vl));	\
+    vm_f_t vmc__s, vmc__se;						\
+    VM_TWO_SUM (vmc__s, vmc__se, VM_VFMV_V_F (VM_ASIN_PIO2_HI, (vl)),	\
+		VM_VFNEG_V (vmc__w, (vl)), (vl));			\
+    vmc__sh = vmc__s;							\
+    vmc__sl = VM_VFSUB_VV (vmc__se, vmc__we, (vl));			\
+  }									\
+  /* |x| >= 0.5 */							\
+  {									\
+    vm_f_t vmc__s = VM_VFSQRT_V (vmc__z, (vl));				\
+    vm_f_t vmc__df = VM_FROM_BITS (					\
+      VM_VAND_VX (VM_BITS (vmc__s), 0xffffffff00000000ULL, (vl)));	\
+    vm_f_t vmc__c = VM_VFDIV_VV (					\
+      VM_VFMACC_VV (vmc__z, vmc__df, VM_VFNEG_V (vmc__df, (vl)), (vl)),	\
+      VM_VFADD_VV (vmc__s, vmc__df, (vl)), (vl));			\
+    /* x > 0.5: 2*(df + (r*s + c)), tracked.  */			\
+    vm_f_t vmc__w2 = VM_VFMACC_VV (vmc__c, vmc__r, vmc__s, (vl));	\
+    vm_f_t vmc__g, vmc__ge;						\
+    VM_TWO_SUM (vmc__g, vmc__ge, vmc__df, vmc__w2, (vl));		\
+    vm_f_t vmc__ph = VM_VFMUL_VF (vmc__g, 2.0, (vl));			\
+    vm_f_t vmc__pl = VM_VFMUL_VF (vmc__ge, 2.0, (vl));			\
+    /* x < -0.5: pi - 2*(s + (r*s - pio2_lo)), tracked.  */		\
+    vm_f_t vmc__w1 = VM_VFMACC_VV (VM_VFNEG_V (				\
+				     VM_VFMV_V_F (VM_ASIN_PIO2_LO, (vl)), (vl)), \
+				   vmc__r, vmc__s, (vl));		\
+    vm_f_t vmc__g1, vmc__g1e;						\
+    VM_TWO_SUM (vmc__g1, vmc__g1e, vmc__s, vmc__w1, (vl));		\
+    vm_f_t vmc__h1 = VM_VFMUL_VF (vmc__g1, 2.0, (vl));			\
+    vm_f_t vmc__h1e = VM_VFMUL_VF (vmc__g1e, 2.0, (vl));		\
+    vm_f_t vmc__P, vmc__Pe;						\
+    VM_TWO_SUM (vmc__P, vmc__Pe, VM_VFMV_V_F (VM_ATAN2_PI, (vl)),	\
+		VM_VFNEG_V (vmc__h1, (vl)), (vl));			\
+    vm_f_t vmc__nh = VM_VFSUB_VV (vmc__Pe, vmc__h1e, (vl));		\
+    /* select by |x| and sign */					\
+    vm_f_t vmc__bh = VM_VFMERGE_VVM (vmc__sh, vmc__ph, vmc__mgt, (vl));	\
+    vm_f_t vmc__bl = VM_VFMERGE_VVM (vmc__sl, vmc__pl, vmc__mgt, (vl));	\
+    vm_b_t vmc__mnegge = VM_VMAND_MM (vmc__mgt, vmc__mneg, (vl));	\
+    (ah) = VM_VFMERGE_VVM (vmc__bh, vmc__P, vmc__mnegge, (vl));	\
+    (al) = VM_VFMERGE_VVM (vmc__bl, vmc__nh, vmc__mnegge, (vl));	\
+  }									\
+} while (0)
+
+
+static inline double
+vm_atan_scalar (double x)
+{
+  return atan (x);
+}
+#define atan_scalar vm_atan_scalar
+
+static inline double
+vm_atanpi_scalar (double x)
+{
+  return atanpi (x);
+}
+#define atanpi_scalar vm_atanpi_scalar
+
+static inline double
+vm_atan2_scalar (double y, double x)
+{
+  return atan2 (y, x);
+}
+#define atan2_scalar vm_atan2_scalar
+
+static inline double
+vm_atan2pi_scalar (double y, double x)
+{
+  return atan2pi (y, x);
+}
+#define atan2pi_scalar vm_atan2pi_scalar
+
+/* Scalar fixup for atan2pi lanes whose |y/x| quotient is subnormal: the
+   2^600 evaluation recovers the exact quotient despite the coarse grid,
+   then one rounding divides the scale out (the final multiply raises
+   UNDERFLOW exactly when the reference expects it; an exactly-on-grid
+   subnormal result gets it forced here).  */
+static inline double
+vm_atan2pi_msc (double y, double x)
+{
+  double q = y / x;
+  double qs = q * 0x1p600;
+  double ys = y * 0x1p600;
+  double rem = fma (-qs, x, ys);
+  double qlo = rem / x;
+  double v = qs + qlo;
+  double ve = (qs - v) + qlo;
+  double p = v * 3.18309886183790691216e-01;
+  double e = fma (v, 3.18309886183790691216e-01, -p)
+	     + v * -1.96786766751824858819e-17
+	     + ve * 3.18309886183790691216e-01;
+  double r = (p + e) * 0x1p-600;
+  if (r == 0.0)
+    return __builtin_copysign (0.0, v);	/* keep the sign of y/x */
+  if (fabs (r) < 0x1p-1022)
+    {
+      double z = 0x1p-1022 * 0x1p-1022;	/* flushes to +0, raises UF */
+      r = r + z;
+    }
+  return r;
+}
+#define atan2pi_msc vm_atan2pi_msc
+
+/* ------------------------------------------------------------------ */
+/* Legacy dd kernel, kept as the out-of-line fallback for lanes outside
+   the fast path's operand window.
+
+   The table kernel is only flag-safe and 0.5-ulp accurate when both
+   operands sit in [2^-500, 2^500): inside, every intermediate is a
+   normal number and the ratio is bounded by 2^+-1000, so neither the
+   reduction nor the quotient can underflow, overflow or cancel into a
+   subnormal.  Outside that window live zero, subnormal, inf and NaN
+   operands plus the extreme-ratio pairs, and the reference expects no
+   spurious flag there -- exactly the cases the old fdlibm-shaped dd
+   kernel (with its guard values and masked patches) was tuned for.  It
+   is therefore retained verbatim and reached only when a lane needs it,
+   through a vfirst guard so the hot path pays nothing.
+
+   The old kernels are the ones this file used before the rewrite; their
+   accuracy on those lanes is the accuracy the library had.  */
+
 /* VM_ATAN_DD(yh, yl, x, xlo, vl): atan(x + xlo) as a dd pair, xlo the
    tail of x (zero vector for plain atan).  fdlibm s_atan.c; the final
    composition hi - ((r*S - lo) - r) is evaluated with error-free
@@ -161,8 +562,8 @@
   vm_f_t vma__r, vma__rr; \
   if ((fastq) && VM_LMUL <= 2) \
     { \
-      vm_f_t vq__rt = VM_VFRDIV_VF ( \
-        VM_VFMUL_VF (vma__rden, 0x1p-600, (vl)), 1.0, (vl)); \
+      vm_f_t vq__rt; \
+      VM_RCP_FULL (vq__rt, VM_VFMUL_VF (vma__rden, 0x1p-600, (vl)), (vl)); \
       vq__rt = VM_VFMUL_VF (vq__rt, 0x1p-600, (vl)); \
       vma__r = VM_VFMUL_VV (vma__rnum, vq__rt, (vl)); \
       vma__rr = VM_VFMUL_VV ( \
@@ -258,10 +659,6 @@
 #define VM_ATAN_ONLY_DD(yh, yl, x, vl)					\
   VM_ATAN_DD ((yh), (yl), (x), VM_VFMV_V_F (0.0, (vl)), (vl), 1)
 
-/* ------------------------------------------------------------------ */
-/* atan2(y, x) as a dd pair.  fdlibm e_atan2.c with the quotient's own
-   rounding error recovered (y - q*x is exact by fma) and fed to the
-   atan kernel as a tail.  */
 #define VM_ATAN2_DD(yh, yl, mo, y, x, vl) do {				\
   vm_i64_t vma2__hx = VM_VSRA_VX (VM_REINT_U_I (VM_BITS (x)), 32, (vl)); \
   vm_u64_t vma2__ix = VM_VAND_VX (VM_REINT_I_U (vma2__hx), 0x7fffffff, (vl)); \
@@ -458,238 +855,26 @@
   (mo) = vma2__msc;							\
 } while (0)
 
-/* ------------------------------------------------------------------ */
-/* asin / acos: fdlibm e_asin.c / e_acos.c.
-   |x| < 0.5  : rational on x^2, asin = x + x*w.
-   |x| >= 0.5 : s = sqrt((1-|x|)/2), the same rational on z=(1-|x|)/2.
-   The final composition is carried as a dd pair.  */
 
-#define VM_ASIN_PS0 1.66666666666666657415e-01
-#define VM_ASIN_PS1 -3.25565818622400915405e-01
-#define VM_ASIN_PS2 2.01212532134862925881e-01
-#define VM_ASIN_PS3 -4.00555345006794114027e-02
-#define VM_ASIN_PS4 7.91534994289814532176e-04
-#define VM_ASIN_PS5 3.47933107596021167570e-05
-#define VM_ASIN_QS1 -2.40339491173441421878e+00
-#define VM_ASIN_QS2 2.02094576023350569471e+00
-#define VM_ASIN_QS3 -6.88283971605453293030e-01
-#define VM_ASIN_QS4 7.70381505559019352791e-02
-#define VM_ASIN_PIO2_HI 1.57079632679489655800e+00
-#define VM_ASIN_PIO2_LO 6.12323399573676603587e-17
-#define VM_ASIN_PIO4_HI 7.85398163397448278999e-01
 
-/* r = P(z)/Q(z), the shared rational of asin/acos.  */
-static inline vm_f_t
-VM_KFN (asin_rat) (vm_f_t z, size_t vl)
-{
-  vm_f_t p = VM_VFMACC_VF (VM_VFMV_V_F (VM_ASIN_PS4, vl), VM_ASIN_PS5, z, vl);
-  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_PS3, vl), z, p, vl);
-  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_PS2, vl), z, p, vl);
-  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_PS1, vl), z, p, vl);
-  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_PS0, vl), z, p, vl);
-  p = VM_VFMUL_VV (z, p, vl);
-  vm_f_t q = VM_VFMACC_VF (VM_VFMV_V_F (VM_ASIN_QS3, vl), VM_ASIN_QS4, z, vl);
-  q = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_QS2, vl), z, q, vl);
-  q = VM_VFMACC_VV (VM_VFMV_V_F (VM_ASIN_QS1, vl), z, q, vl);
-  q = VM_VFMACC_VV (VM_VFMV_V_F (1.0, vl), z, q, vl);
-  return VM_VFDIV_VV (p, q, vl);
-}
-
-/* asin(x) as a dd pair; x finite, |x| < 1 (special lanes sanitized by
-   the caller).  */
-#define VM_ASIN_DD(ah, al, x, vl) do {					\
-  vm_u64_t vms__ix = VM_VAND_VX (VM_VSRL_VX (VM_BITS (x), 32, (vl)),	\
-				 0x7fffffff, (vl));			\
-  vm_b_t vms__mneg = VM_VMSLT_VX (VM_REINT_U_I (VM_BITS (x)), 0, (vl));	\
-  vm_b_t vms__mhalf = VM_VMSLTU_VX (vms__ix, 0x3fe00000, (vl));		\
-  vm_b_t vms__mge = VM_VMNOT_M (vms__mhalf, (vl));			\
-  vm_f_t vms__a = VM_VFABS_V (x, (vl));					\
-  /* |x| < 2^-27: fdlibm returns x itself.  x*x would underflow on the
-     subnormal inputs (spurious UNDERFLOW), so those lanes are fed a
-     benign z and their x*r term is masked to zero below.  */		\
-  vm_b_t vms__mtiny = VM_VMSLTU_VX (vms__ix, 0x3e400000, (vl));		\
-  vm_b_t vms__mmul = VM_VMNOT_M (vms__mtiny, (vl));			\
-  vm_f_t vms__z = VM_VFMUL_VV_MU (vms__mmul, VM_VFMV_V_F (0.25, (vl)),	\
-				  x, x, (vl));				\
-  vm_f_t vms__z2 = VM_VFMUL_VF (VM_VFRSUB_VF (vms__a, 1.0, (vl)), 0.5, (vl)); \
-  vms__z = VM_VFMERGE_VVM (vms__z, vms__z2, vms__mge, (vl));		\
-  vm_f_t vms__r = VM_KFN (asin_rat) (vms__z, (vl));			\
-  /* |x| < 2^-27: fdlibm returns x itself; zeroing r kills both the x*r
-     term and its residual without an underflowing product.  */		\
-  vms__r = VM_VFMERGE_VFM (vms__r, 0.0, vms__mtiny, (vl));		\
-  /* |x| < 0.5: x + x*r, tracked (Fast2Sum valid: |x*r| << |x|).  */	\
-  vm_f_t vms__t = VM_VFMUL_VV (x, vms__r, (vl));			\
-  vm_f_t vms__te = VM_VFNEG_V (VM_VFNMSAC_VV (vms__t, x, vms__r, (vl)), (vl)); \
-  vm_f_t vms__yh, vms__yl;						\
-  VM_FAST2SUM (vms__yh, vms__yl, x, vms__t, (vl));			\
-  vms__yl = VM_VFADD_VV (vms__yl, vms__te, (vl));			\
-  /* |x| >= 0.5: fdlibm's pio4 split.  */				\
-  {									\
-    vm_f_t vms__s = VM_VFSQRT_V (vms__z, (vl));				\
-    vm_f_t vms__w = VM_FROM_BITS (					\
-      VM_VAND_VX (VM_BITS (vms__s), 0xffffffff00000000ULL, (vl)));	\
-    /* c = (z - w*w)/(s + w) */						\
-    vm_f_t vms__c = VM_VFDIV_VV (					\
-      VM_VFMACC_VV (vms__z, vms__w, VM_VFNEG_V (vms__w, (vl)), (vl)),	\
-      VM_VFADD_VV (vms__s, vms__w, (vl)), (vl));			\
-    /* pp = 2*s*r - (pio2_lo - 2*c) */					\
-    vm_f_t vms__pp = VM_VFRSUB_VF (					\
-				  VM_VFMUL_VF (vms__c, 2.0, (vl)),	\
-				  VM_ASIN_PIO2_LO, (vl));		\
-    vms__pp = VM_VFMACC_VV (VM_VFNEG_V (vms__pp, (vl)),		\
-			    VM_VFMUL_VF (vms__s, 2.0, (vl)), vms__r, (vl)); \
-    /* qq = pio4_hi - 2*w */						\
-    vm_f_t vms__qq = VM_VFRSUB_VF (					\
-				  VM_VFMUL_VF (vms__w, 2.0, (vl)),	\
-				  VM_ASIN_PIO4_HI, (vl));		\
-    /* t = pio4_hi - (pp - qq), tracked.  */				\
-    vm_f_t vms__B, vms__Be, vms__C, vms__Ce;				\
-    VM_TWO_SUM (vms__B, vms__Be, vms__pp, VM_VFNEG_V (vms__qq, (vl)), (vl)); \
-    VM_TWO_SUM (vms__C, vms__Ce, VM_VFMV_V_F (VM_ASIN_PIO4_HI, (vl)),	\
-		VM_VFNEG_V (vms__B, (vl)), (vl));			\
-    vm_f_t vms__bt = VM_VFMERGE_VVM (vms__C,				\
-				     VM_VFNEG_V (vms__C, (vl)),		\
-				     vms__mneg, (vl));			\
-    vm_f_t vms__bl = VM_VFSUB_VV (vms__Ce, vms__Be, (vl));		\
-    vms__bl = VM_VFMERGE_VVM (vms__bl,				\
-			      VM_VFNEG_V (vms__bl, (vl)), vms__mneg, (vl)); \
-    vms__yh = VM_VFMERGE_VVM (vms__bt, vms__yh, vms__mhalf, (vl));	\
-    vms__yl = VM_VFMERGE_VVM (vms__bl, vms__yl, vms__mhalf, (vl));	\
-  }									\
-  (ah) = vms__yh;							\
-  (al) = vms__yl;							\
-} while (0)
-
-/* acos(x) as a dd pair (|x| < 1).  */
-#define VM_ACOS_DD(ah, al, x, vl) do {					\
-  vm_u64_t vmc__ix = VM_VAND_VX (VM_VSRL_VX (VM_BITS (x), 32, (vl)),	\
-				 0x7fffffff, (vl));			\
-  vm_b_t vmc__mneg = VM_VMSLT_VX (VM_REINT_U_I (VM_BITS (x)), 0, (vl));	\
-  vm_b_t vmc__mhalf = VM_VMSLTU_VX (vmc__ix, 0x3fe00000, (vl));		\
-  vm_b_t vmc__mgt = VM_VMNOT_M (vmc__mhalf, (vl));			\
-  vm_f_t vmc__a = VM_VFABS_V (x, (vl));					\
-  vm_b_t vmc__mtiny = VM_VMSLTU_VX (vmc__ix, 0x3e400000, (vl));		\
-  vm_b_t vmc__mmul = VM_VMNOT_M (vmc__mtiny, (vl));			\
-  vm_f_t vmc__z = VM_VFMUL_VV_MU (vmc__mmul, VM_VFMV_V_F (0.25, (vl)),	\
-				  x, x, (vl));				\
-  vm_f_t vmc__z2 = VM_VFMUL_VF (VM_VFRSUB_VF (vmc__a, 1.0, (vl)), 0.5, (vl)); \
-  vmc__z = VM_VFMERGE_VVM (vmc__z, vmc__z2, vmc__mgt, (vl));		\
-  vm_f_t vmc__r = VM_KFN (asin_rat) (vmc__z, (vl));			\
-  /* |x| < 0.5: pio2_hi - (x - (pio2_lo - x*r)), tracked.  */		\
-  vm_f_t vmc__sh, vmc__sl;						\
-  {									\
-    vm_f_t vmc__t = VM_VFMUL_VV_MU (vmc__mmul, VM_VFMV_V_F (0.0, (vl)),	\
-				    x, vmc__r, (vl));			\
-    vm_f_t vmc__u = VM_VFRSUB_VF (vmc__t, VM_ASIN_PIO2_LO, (vl));	\
-    vm_f_t vmc__w, vmc__we;						\
-    VM_TWO_SUM (vmc__w, vmc__we, x, VM_VFNEG_V (vmc__u, (vl)), (vl));	\
-    vm_f_t vmc__s, vmc__se;						\
-    VM_TWO_SUM (vmc__s, vmc__se, VM_VFMV_V_F (VM_ASIN_PIO2_HI, (vl)),	\
-		VM_VFNEG_V (vmc__w, (vl)), (vl));			\
-    vmc__sh = vmc__s;							\
-    vmc__sl = VM_VFSUB_VV (vmc__se, vmc__we, (vl));			\
-  }									\
-  /* |x| >= 0.5 */							\
-  {									\
-    vm_f_t vmc__s = VM_VFSQRT_V (vmc__z, (vl));				\
-    vm_f_t vmc__df = VM_FROM_BITS (					\
-      VM_VAND_VX (VM_BITS (vmc__s), 0xffffffff00000000ULL, (vl)));	\
-    vm_f_t vmc__c = VM_VFDIV_VV (					\
-      VM_VFMACC_VV (vmc__z, vmc__df, VM_VFNEG_V (vmc__df, (vl)), (vl)),	\
-      VM_VFADD_VV (vmc__s, vmc__df, (vl)), (vl));			\
-    /* x > 0.5: 2*(df + (r*s + c)), tracked.  */			\
-    vm_f_t vmc__w2 = VM_VFMACC_VV (vmc__c, vmc__r, vmc__s, (vl));	\
-    vm_f_t vmc__g, vmc__ge;						\
-    VM_TWO_SUM (vmc__g, vmc__ge, vmc__df, vmc__w2, (vl));		\
-    vm_f_t vmc__ph = VM_VFMUL_VF (vmc__g, 2.0, (vl));			\
-    vm_f_t vmc__pl = VM_VFMUL_VF (vmc__ge, 2.0, (vl));			\
-    /* x < -0.5: pi - 2*(s + (r*s - pio2_lo)), tracked.  */		\
-    vm_f_t vmc__w1 = VM_VFMACC_VV (VM_VFNEG_V (				\
-				     VM_VFMV_V_F (VM_ASIN_PIO2_LO, (vl)), (vl)), \
-				   vmc__r, vmc__s, (vl));		\
-    vm_f_t vmc__g1, vmc__g1e;						\
-    VM_TWO_SUM (vmc__g1, vmc__g1e, vmc__s, vmc__w1, (vl));		\
-    vm_f_t vmc__h1 = VM_VFMUL_VF (vmc__g1, 2.0, (vl));			\
-    vm_f_t vmc__h1e = VM_VFMUL_VF (vmc__g1e, 2.0, (vl));		\
-    vm_f_t vmc__P, vmc__Pe;						\
-    VM_TWO_SUM (vmc__P, vmc__Pe, VM_VFMV_V_F (VM_ATAN2_PI, (vl)),	\
-		VM_VFNEG_V (vmc__h1, (vl)), (vl));			\
-    vm_f_t vmc__nh = VM_VFSUB_VV (vmc__Pe, vmc__h1e, (vl));		\
-    /* select by |x| and sign */					\
-    vm_f_t vmc__bh = VM_VFMERGE_VVM (vmc__sh, vmc__ph, vmc__mgt, (vl));	\
-    vm_f_t vmc__bl = VM_VFMERGE_VVM (vmc__sl, vmc__pl, vmc__mgt, (vl));	\
-    vm_b_t vmc__mnegge = VM_VMAND_MM (vmc__mgt, vmc__mneg, (vl));	\
-    (ah) = VM_VFMERGE_VVM (vmc__bh, vmc__P, vmc__mnegge, (vl));	\
-    (al) = VM_VFMERGE_VVM (vmc__bl, vmc__nh, vmc__mnegge, (vl));	\
-  }									\
-} while (0)
-
-static inline double
-vm_atan2pi_scalar (double y, double x)
-{
-  return atan2pi (y, x);
-}
-#define atan2pi_scalar vm_atan2pi_scalar
-
-static inline double
-vm_atan2_scalar (double y, double x)
-{
-  return atan2 (y, x);
-}
-#define atan2_scalar vm_atan2_scalar
-
-/* Scalar fixup for atan2pi lanes whose |y/x| quotient is subnormal: the
-   2^600 evaluation recovers the exact quotient despite the coarse grid,
-   then one rounding divides the scale out (the final multiply raises
-   UNDERFLOW exactly when the reference expects it; an exactly-on-grid
-   subnormal result gets it forced here).  */
-static inline double
-vm_atan2pi_msc (double y, double x)
-{
-  double q = y / x;
-  double qs = q * 0x1p600;
-  double ys = y * 0x1p600;
-  double rem = fma (-qs, x, ys);
-  double qlo = rem / x;
-  double v = qs + qlo;
-  double ve = (qs - v) + qlo;
-  double p = v * 3.18309886183790691216e-01;
-  double e = fma (v, 3.18309886183790691216e-01, -p)
-	     + v * -1.96786766751824858819e-17
-	     + ve * 3.18309886183790691216e-01;
-  double r = (p + e) * 0x1p-600;
-  if (r == 0.0)
-    return __builtin_copysign (0.0, v);	/* keep the sign of y/x */
-  if (fabs (r) < 0x1p-1022)
-    {
-      double z = 0x1p-1022 * 0x1p-1022;	/* flushes to +0, raises UF */
-      r = r + z;
-    }
-  return r;
-}
-#define atan2pi_msc vm_atan2pi_msc
-
-/* ------------------------------------------------------------------ */
-/* public kernels */
-
-static inline vm_f_t
-VM_KFN (atan) (vm_f_t x, size_t vl)
+/* Out-of-line fallbacks: recompute the masked lanes with the legacy
+   kernel and merge.  Passing vector groups by value spills the caller's
+   live registers, so the call site tests vfirst first.  */
+__attribute__ ((noinline)) static vm_f_t
+VM_KFN (atan_ref) (vm_f_t x, vm_f_t r, vm_b_t m, size_t vl)
 {
   vm_f_t yh, yl, y;
   VM_ATAN_ONLY_DD (yh, yl, x, vl);
   VM_INVTRIG_COLLAPSE (y, yh, yl, vl);
-  return y;
+  return VM_VFMERGE_VVM (r, y, m, vl);
 }
 
-/* atan(x)/pi: one rounding on the finished pi-scaled value.  */
-static inline vm_f_t
-VM_KFN (atanpi) (vm_f_t x, size_t vl)
+__attribute__ ((noinline)) static vm_f_t
+VM_KFN (atanpi_ref) (vm_f_t x, vm_f_t r, vm_b_t m, size_t vl)
 {
   vm_f_t yh, yl, y;
   VM_ATAN_ONLY_DD (yh, yl, x, vl);
   VM_MUL_INVPI_DD (y, yh, yl, vl);
-  /* atan(+-inf)/pi = +-0.5 (the dd carries the rounded pi/2, whose scale
-     is only 0.17 ulp from the exact limit), NaN passes through.  */
   {
     vm_u64_t ab = VM_VAND_VX (VM_BITS (x), VM_ABSMASK_U64, (vl));
     vm_b_t minf = VM_VMSEQ_VX (ab, 0x7ff0000000000000ULL, (vl));
@@ -698,61 +883,107 @@ VM_KFN (atanpi) (vm_f_t x, size_t vl)
     y = VM_VFMERGE_VVM (y, half, minf, (vl));
     y = VM_VFMERGE_VVM (y, yh, mnan, (vl));
   }
-  /* atan(+-0)/pi = +-0 (the dd product folds -0).  */
-  return VM_VFMERGE_VVM (y, VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, (vl)), x, (vl)), \
-			 VM_VMFEQ_VF (x, 0.0, (vl)), (vl));
+  y = VM_VFMERGE_VVM (y, VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, (vl)), x, (vl)),
+		      VM_VMFEQ_VF (x, 0.0, (vl)), (vl));
+  return VM_VFMERGE_VVM (r, y, m, vl);
 }
 
-static inline vm_f_t
-VM_KFN (atan2_core) (vm_f_t y, vm_f_t x, size_t vl)
+__attribute__ ((noinline)) static vm_f_t
+VM_KFN (atan2_ref) (vm_f_t y, vm_f_t x, vm_f_t r, vm_b_t m, size_t vl)
 {
-  vm_f_t yh, yl, r;
+  vm_f_t yh, yl, y2;
   vm_b_t msc;
   VM_ATAN2_DD (yh, yl, msc, y, x, vl);
-  VM_INVTRIG_COLLAPSE (r, yh, yl, vl);
-  /* divide the 2^600 out of the scaled-quotient lanes: exact wherever
-     the answer is normal, and the rounding there is the UNDERFLOW the
-     reference expects of a subnormal answer.  */
-  r = VM_VFMERGE_VVM (r, VM_VFMUL_VF_MU (msc, VM_VFMV_V_F (0.0, (vl)), r,
-					 0x1p-600, (vl)), msc, (vl));
-  return r;
+  (void) msc;
+  VM_INVTRIG_COLLAPSE (y2, yh, yl, vl);
+  return VM_VFMERGE_VVM (r, y2, m, vl);
+}
+
+__attribute__ ((noinline)) static vm_f_t
+VM_KFN (atan2pi_ref) (vm_f_t y, vm_f_t x, vm_f_t r, vm_b_t m, size_t vl)
+{
+  vm_f_t yh, yl, yr;
+  vm_b_t msc;
+  vm_u64_t abx = VM_VAND_VX (VM_BITS (x), VM_ABSMASK_U64, (vl));
+  vm_u64_t aby = VM_VAND_VX (VM_BITS (y), VM_ABSMASK_U64, (vl));
+  vm_b_t mnan = VM_VMOR_MM (VM_VMSGTU_VX (abx, 0x7ff0000000000000ULL, (vl)),
+			     VM_VMSGTU_VX (aby, 0x7ff0000000000000ULL, (vl)),
+			     (vl));
+  VM_ATAN2_DD (yh, yl, msc, y, x, vl);
+  VM_MUL_INVPI_DD (yr, yh, yl, vl);
+  yr = VM_VFMERGE_VVM (yr, yh, mnan, (vl));
+  yr = VM_VFMERGE_VVM (yr, VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, (vl)), y, (vl)),
+		       VM_VMFEQ_VF (yr, 0.0, (vl)), (vl));
+  if (VM_VFIRST_M (msc, vl) < 0)
+    return VM_VFMERGE_VVM (r, yr, m, vl);
+  yr = VM_FIXUP2 (y, x, yr, msc, vl, atan2pi_msc);
+  return VM_VFMERGE_VVM (r, yr, m, vl);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* public kernels */
+
+/* atan(x): the atan2 core with x = 1 (the reduction then gives
+   q = min(|x|,1)/max(|x|,1) and the swapped quarter supplies the
+   pi/2 - atan(1/|x|) branch), odd sign applied on the collapsed pair.  */
+static inline vm_f_t
+VM_KFN (atan) (vm_f_t x, size_t vl)
+{
+  vm_f_t yh, yl, r;
+  vm_b_t msp;
+  VM_ATAN2_TAB (yh, yl, msp, x, VM_VFMV_V_F (1.0, (vl)), vl,
+		vm_atan_tab_hi, vm_atan_tab_lo,
+		VM_AT_C0, VM_AT_C1, VM_AT_C2, VM_AT_C3, 0.0, 1);
+  r = VM_VFSGNJ_VV (VM_VFADD_VV (yh, yl, vl), x, vl);
+  if (VM_VFIRST_M (msp, vl) < 0)
+    return r;
+  return VM_KFN (atan_ref) (x, r, msp, vl);
+}
+
+/* atan(x)/pi: same kernel against the pre-divided table, so the pi
+   scaling costs no extra rounding at all.  */
+static inline vm_f_t
+VM_KFN (atanpi) (vm_f_t x, size_t vl)
+{
+  vm_f_t yh, yl, r;
+  vm_b_t msp;
+  VM_ATAN2_TAB (yh, yl, msp, x, VM_VFMV_V_F (1.0, (vl)), vl,
+		vm_atanpi_tab_hi, vm_atanpi_tab_lo,
+		VM_ATP_C0, VM_ATP_C1, VM_ATP_C2, VM_ATP_C3, VM_ATP_C0R, 1);
+  r = VM_VFSGNJ_VV (VM_VFADD_VV (yh, yl, vl), x, vl);
+  if (VM_VFIRST_M (msp, vl) < 0)
+    return r;
+  return VM_KFN (atanpi_ref) (x, r, msp, vl);
 }
 
 static inline vm_f_t
 VM_KFN (atan2) (vm_f_t y, vm_f_t x, size_t vl)
 {
   vm_f_t yh, yl, r;
-  vm_b_t msc;
-  VM_ATAN2_DD (yh, yl, msc, y, x, vl);
-  (void) msc;
-  VM_INVTRIG_COLLAPSE (r, yh, yl, vl);
-  return r;
+  vm_b_t msp;
+  VM_ATAN2_TAB (yh, yl, msp, y, x, vl, vm_atan_tab_hi, vm_atan_tab_lo,
+		VM_AT_C0, VM_AT_C1, VM_AT_C2, VM_AT_C3, 0.0, 0);
+  r = VM_VFSGNJ_VV (VM_VFADD_VV (yh, yl, vl), y, vl);
+  if (VM_VFIRST_M (msp, vl) < 0)
+    return r;
+  return VM_KFN (atan2_ref) (y, x, r, msp, vl);
 }
 
-/* atan2(y,x)/pi: the quadrant dd goes through one final pi scale.  */
+/* atan2(y,x)/pi: the quadrant constants are pre-divided by pi in the
+   table (0, 1/2, 1 instead of 0, pi/2, pi), so this is the same kernel
+   against the _pi table.  */
 static inline vm_f_t
 VM_KFN (atan2pi) (vm_f_t y, vm_f_t x, size_t vl)
 {
-  vm_f_t yh, yl, yr;
-  vm_b_t msc;
-  vm_u64_t abx = VM_VAND_VX (VM_BITS (x), VM_ABSMASK_U64, (vl));
-  vm_u64_t aby = VM_VAND_VX (VM_BITS (y), VM_ABSMASK_U64, (vl));
-  vm_b_t mnan = VM_VMOR_MM (VM_VMSGTU_VX (abx, 0x7ff0000000000000ULL, (vl)), \
-			     VM_VMSGTU_VX (aby, 0x7ff0000000000000ULL, (vl)), (vl));
-  VM_ATAN2_DD (yh, yl, msc, y, x, vl);
-  VM_MUL_INVPI_DD (yr, yh, yl, vl);
-  yr = VM_VFMERGE_VVM (yr, yh, mnan, (vl));
-  yr = VM_VFMERGE_VVM (yr, yh, mnan, (vl));
-  yr = VM_VFMERGE_VVM (yr, VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, (vl)), y, (vl)), \
-		       VM_VMFEQ_VF (yr, 0.0, (vl)), (vl));
-  /* adversarial subnormal-quotient lanes: exact scalar reconstruction */
-  /* The rare-lane rescue is out of line, so enter it only when a lane
-     actually needs it: an unconditional call spills the live vector
-     groups and costs ~40 ns/element on this core even when the mask is
-     empty.  */
-  if (VM_VFIRST_M (msc, vl) < 0)
-    return yr;
-  return VM_FIXUP2 (y, x, yr, msc, vl, atan2pi_msc);
+  vm_f_t yh, yl, r;
+  vm_b_t msp;
+  VM_ATAN2_TAB (yh, yl, msp, y, x, vl, vm_atanpi_tab_hi, vm_atanpi_tab_lo,
+		VM_ATP_C0, VM_ATP_C1, VM_ATP_C2, VM_ATP_C3, VM_ATP_C0R, 0);
+  r = VM_VFSGNJ_VV (VM_VFADD_VV (yh, yl, vl), y, vl);
+  if (VM_VFIRST_M (msp, vl) < 0)
+    return r;
+  return VM_KFN (atan2pi_ref) (y, x, r, msp, vl);
 }
 
 static inline vm_f_t

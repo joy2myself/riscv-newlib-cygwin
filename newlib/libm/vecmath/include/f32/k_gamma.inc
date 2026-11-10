@@ -148,6 +148,7 @@ static const double vm32f_lg_j[16] =
    coefficient broadcast and no register-group copy.  */
 #define VM32F_GAM_POLY(yo, tbl, n, t, vl) do {				\
   VM32_WD_T vmre_p_ = VMF_MV_F ((tbl)[(n)], (vl));			\
+  _Pragma ("GCC unroll 16")						\
   for (int vmre_i_ = (n) - 1; vmre_i_ >= 0; vmre_i_--)			\
     {									\
       vmre_p_ = VMF_MUL_VV (vmre_p_, (t), (vl));			\

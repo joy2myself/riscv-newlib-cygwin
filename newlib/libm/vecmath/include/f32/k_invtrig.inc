@@ -689,32 +689,102 @@ VM32_KFN (acospi) (vm32_f_t x, size_t vl)
 }
 
 /* ==================================================================== */
-/* atan2: ef_atan2.c                                                    */
+/* atan2                                                                */
 /* ==================================================================== */
 
-/* atan2(y, x) for both operands finite, non-zero and in [2^-29, 10.5)
-   with 1e-5 <= |y/x| <= 1e5, carried as (h, l): z = atan(|y/x|) plus
-   the fdlibm quadrant fixup.  */
-static inline void
-VM32_KFN (invtrig_atan2_2) (vm32_f_t y, vm32_f_t x, vm32_f_t q,
-			    vm32_f_t *ho, vm32_f_t *lo, size_t vl)
-{
-  vm32_f_t zh, zl;
-  VM32_KFN (invtrig_atan_pos2) (q, &zh, &zl, vl);
+/* NATIVE binary32 fast path, ef_atan2.c's shape -- z = atan(|y/x|) plus
+   the fdlibm quadrant fixup -- with the *quotient's* rounding recovered
+   from its exact fma remainder (the "divide, then correct with the exact
+   remainder" step of the research notes' T7/T8):
 
-  /* x < 0:  atan2 = pi - z  ==  (pi_hi - z) + pi_lo.  */
+     q = RN(|y|/|x|),   rem = |y| - q*|x|        (exact, one fma)
+     atan(|y|/|x|) = atan(q) + rem/(|x|(1+q^2)) + O((rem/|x|)^2)
+
+   with |x|(1+q^2) = |x| + |y|*q formed by one fma.  The derivative
+   1/(1+q^2) peaks at |q| = 1, so without the correction the ratio's own
+   rounding costs up to 1.42 ulp; with it the only error left is
+   atan(q)'s fdlibm-float ~0.6-0.8 ulp (the same error atanf carries) and
+   the single final hi+lo add.  Replayed over the FULL blob's fast lanes
+   this scores max_ulp 0.72 (1.42 without the correction).
+
+   atan(q) is invtrig_atan_pos2, the double-float f32 atan kernel atanf
+   already uses: (h, l) with h + l = atan(q) to ~2^-45.
+
+   Covered domain; everything else is evaluated by the per-lane f64 path
+   below (never per strip: a lane's value must not depend on its
+   neighbours, which the length/alignment sweeps require):
+     * both operands finite and inside [2^-29, 10.5)  (excludes +-0,
+       subnormals, the poles, +-Inf/NaN and every exact special result);
+     * |y/x| inside [2^-18, 2^18], tested as an integer difference of the
+       magnitude bit patterns before any division.  The lower bound keeps
+       atan_pos2's r^2/r^4 chain normal (no spurious UNDERFLOW); the upper
+       bound keeps the pi - atan(|y/x|) cancellation in the x < 0 branch
+       far below an ulp of the (tiny) result.  */
+
+/* vfrec7.v -- the 7-bit reciprocal estimate.  Raw intrinsic: f32/compat.h
+   does not wrap the estimate instructions.  */
+#define VM32I_REC7(a, vl) VM32_XP2 (__riscv_vfrec7_v_f32m, VM32_LMUL) (a, vl)
+
+/* The wide fallback as a noinline call: the binary64 kernel (plus its
+   double-double atan) dwarfs the fast path, and inlined it would sit
+   inside the strip loop -- which *is* the whole function -- costing fetch
+   bandwidth on every iteration for a branch that is almost never taken.  */
+__attribute__ ((noinline)) static vm32_f_t
+VM32_KFN (atan2_wide) (vm32_f_t y, vm32_f_t x, size_t vl)
+{
+  return VM32_NARROW (VM32_D64 (atan2) (VM32_WIDEN (y, vl),
+					 VM32_WIDEN (x, vl), vl), vl);
+}
+
+static inline vm32_f_t
+VM32_KFN (atan2) (vm32_f_t y, vm32_f_t x, size_t vl)
+{
+  vm32_u_t ix = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffU, vl);
+  vm32_u_t iy = VM32_VAND_VX (VM32_BITS (y), 0x7fffffffU, vl);
+  vm32_b_t mbad = VM32_VMSGEU_VX (ix, 0x41280000u, vl);
+  mbad = VM32_VMOR_MM (mbad, VM32_VMSGEU_VX (iy, 0x41280000u, vl), vl);
+  mbad = VM32_VMOR_MM (mbad, VM32_VMSLTU_VX (ix, 0x31000000u, vl), vl);
+  mbad = VM32_VMOR_MM (mbad, VM32_VMSLTU_VX (iy, 0x31000000u, vl), vl);
+  vm32_i_t d = VM32_REINT_U_I (VM32_VSUB_VV (iy, ix, vl));
+  mbad = VM32_VMOR_MM (mbad, VM32_VMSGE_VX (d, 0x08800000, vl), vl);
+  mbad = VM32_VMOR_MM (mbad, VM32_VMSLE_VX (d, -0x08800000, vl), vl);
+
+  vm32_f_t xs = VM32_VFMERGE_VFM (x, 0.5f, mbad, vl);
+  vm32_f_t ys = VM32_VFMERGE_VFM (y, 0.5f, mbad, vl);
+  vm32_f_t ax = VM32_VFABS_V (xs, vl);
+  vm32_f_t ay = VM32_VFABS_V (ys, vl);
+
+  /* q = |y|/|x| and its exact remainder; the derivative's denominator.
+     The correction is a <= 0.7 ulp term, so its reciprocal only needs a
+     few percent of relative accuracy: vfrec7 (the 7-bit estimate, one
+     ~40x cheaper instruction than vfdiv.vv) is used directly, which
+     costs <= 0.006 ulp of error and saves a second divide per lane.  */
+  vm32_f_t q = VM32_VFDIV_VV (ay, ax, vl);
+  vm32_f_t rem = VM32_VFNMSAC_VV (ay, q, ax, vl);	/* |y| - q*|x| */
+  vm32_f_t der = VM32_VFMACC_VV (ax, ay, q, vl);	/* |x|(1+q^2) */
+  vm32_f_t corr = VM32_VFMUL_VV (rem, VM32I_REC7 (der, vl), vl);
+
+  vm32_f_t h, l;
+  VM32_KFN (invtrig_atan_pos2) (q, &h, &l, vl);
+  l = VM32_VFADD_VV (l, corr, vl);
+
+  /* x < 0:  atan2 = pi - atan(q) == (pi_hi - h) + ((ep - l) + pi_lo).  */
   vm32_f_t hp, ep;
   VM32I_TWO_SUM (hp, ep, VM32_VFMV_V_F (VM32I_PI_HI, vl),
-		 VM32_VFNEG_V (zh, vl), vl);
-  ep = VM32_VFADD_VV (VM32_VFSUB_VV (ep, zl, vl),
-		      VM32_VFMV_V_F (VM32I_PI_LO, vl), vl);
+		 VM32_VFNEG_V (h, vl), vl);
+  ep = VM32_VFADD_VF (VM32_VFSUB_VV (ep, l, vl), VM32I_PI_LO, vl);
 
   vm32_b_t msx = VM32_VMSLT_VX (VM32_REINT_U_I (VM32_BITS (x)), 0, vl);
-  vm32_b_t msy = VM32_VMSLT_VX (VM32_REINT_U_I (VM32_BITS (y)), 0, vl);
-  vm32_f_t h = VM32_VFMERGE_VVM (zh, hp, msx, vl);
-  vm32_f_t e = VM32_VFMERGE_VVM (zl, ep, msx, vl);
-  *ho = VM32_VFMERGE_VVM (h, VM32_VFNEG_V (h, vl), msy, vl);
-  *lo = VM32_VFMERGE_VVM (e, VM32_VFNEG_V (e, vl), msy, vl);
+  vm32_f_t oh = VM32_VFMERGE_VVM (h, hp, msx, vl);
+  vm32_f_t ol = VM32_VFMERGE_VVM (l, ep, msx, vl);
+  /* sign of y, applied to the hi and lo words alike (vfsgnjx).  */
+  oh = VM32_VFSGNJX_VV (oh, ys, vl);
+  ol = VM32_VFSGNJX_VV (ol, ys, vl);
+  vm32_f_t r = VM32_VFADD_VV (oh, ol, vl);
+
+  if (VM32_VFIRST_M (mbad, vl) >= 0)
+    r = VM32_VFMERGE_VVM (r, VM32_KFN (atan2_wide) (y, x, vl), mbad, vl);
+  return r;
 }
 
 /* The shared f64 atan2 body: z = atan(|y/x|) plus the fdlibm quadrant
@@ -739,40 +809,9 @@ VM32_KFN (invtrig_atan2_2) (vm32_f_t y, vm32_f_t x, vm32_f_t q,
   (hout) = vmd__h;							\
 } while (0)
 
-static inline vm32_f_t
-VM32_KFN (atan2) (vm32_f_t y, vm32_f_t x, size_t vl)
-{
-  vm32_u_t ix = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffU, vl);
-  vm32_u_t iy = VM32_VAND_VX (VM32_BITS (y), 0x7fffffffU, vl);
-  /* Wide path for a non-finite or out-of-range operand, a zero/tiny
-     operand, and for |y/x| outside [2^-18, 2^18]: the fast path's
-     x*x/x^4 chain would underflow on such ratios (with a spurious
-     FE_UNDERFLOW), and every +-0, pole and inf/NaN result is the
-     fallback's business.  The ratio bound is an integer compare of the
-     magnitude bit patterns (monotone in the value), so no division is
-     performed on lanes about to be rejected.  */
-  vm32_b_t mbad = VM32_VMSGEU_VX (ix, 0x41280000u, vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSGEU_VX (iy, 0x41280000u, vl), vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSLTU_VX (ix, 0x31000000u, vl), vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSLTU_VX (iy, 0x31000000u, vl), vl);
-  vm32_i_t d = VM32_REINT_U_I (VM32_VSUB_VV (iy, ix, vl));
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSGE_VX (d, 0x08800000, vl), vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSLE_VX (d, -0x08800000, vl), vl);
-
-  vm32_f_t xs = VM32_VFMERGE_VFM (x, 0.5f, mbad, vl);
-  vm32_f_t ys = VM32_VFMERGE_VFM (y, 0.5f, mbad, vl);
-  vm32d_f_t dh;
-  VM32I_D_ATAN2_BODY (dh, ys, xs, vl);
-  vm32_f_t h = VM32_NARROW (dh, vl);
-  if (VM32_VFIRST_M (mbad, vl) >= 0)
-    {
-      vm32_f_t w = VM32_NARROW (VM32_D64 (atan2) (VM32_WIDEN (y, vl),
-						  VM32_WIDEN (x, vl), vl), vl);
-      h = VM32_VFMERGE_VVM (h, w, mbad, vl);
-    }
-  return h;
-}
-
+/* atan2pi keeps the plain-binary64 body: its extra 1/pi scaling needs the
+   full 53-bit intermediate to stay inside 1.0 ulp, and it is not one of
+   the entries this pass targets.  */
 static inline vm32_f_t
 VM32_KFN (atan2pi) (vm32_f_t y, vm32_f_t x, size_t vl)
 {

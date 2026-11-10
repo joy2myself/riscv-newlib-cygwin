@@ -740,6 +740,8 @@ VM_KFN (log1p_poly) (vm_f_t z, size_t vl)
   vm_b_t vlp__kpos = VM_VMSGT_VX (vlp__kraw, 0, (vl));			\
   vm_f_t vlp__c = VM_VFMERGE_VVM (vlp__cB, vlp__cA, vlp__kpos, (vl));	\
   vlp__c = VM_VFMERGE_VFM (vlp__c, 0.0, vlp__ge53, (vl));		\
+  /* true division: u = 1+x can be subnormal, where a reciprocal \
+     estimate would overflow to inf and raise a spurious flag.  */ \
   vlp__c = VM_VFDIV_VV (vlp__c, vlp__u, (vl));				\
   /* normalize u to [1,2) or [0.5,1); hu is the high 20 mantissa bits */ \
   vm_u64_t vlp__hu = VM_VAND_VX (vlp__uh, 0x000fffff, (vl));		\
@@ -763,7 +765,7 @@ VM_KFN (log1p_poly) (vm_f_t z, size_t vl)
   vm_f_t vlp__hfsqe = VM_VFMUL_VF (					\
     VM_VFNEG_V (VM_VFNMSAC_VV (vlp__ff, vlp__fh, vlp__fh, (vl)), (vl)),	\
     0.5, (vl));								\
-  vm_f_t vlp__s = VM_VFDIV_VV (vlp__fh, VM_VFADD_VF (vlp__fh, 2.0, (vl)), (vl)); \
+  vm_f_t vlp__s; VM_QDIV (vlp__s, vlp__fh, VM_VFADD_VF (vlp__fh, 2.0, (vl)), (vl)); \
   vm_f_t vlp__z = VM_VFMUL_VV (vlp__s, vlp__s, (vl));			\
   vm_f_t vlp__X = VM_VFMUL_VV (vlp__s,					\
     VM_VFADD_VV (vlp__hfsq,						\

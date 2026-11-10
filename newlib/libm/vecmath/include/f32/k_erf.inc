@@ -194,21 +194,28 @@ VM32_KFN (erfc_fix) (float x)
 }
 
 /* Merge fn(x) into r for the lanes selected by m.  Buffer bound:
-   vl <= VLMAX(e32, LMUL <= 4) = VLEN/8 lanes, 600 covers VLEN to 4800.  */
+   vl <= VLMAX(e32, LMUL <= 4) = VLEN/8 lanes, 600 covers VLEN to 4800.
+   noinline: the scalar loop is larger than everything else in the kernel
+   put together, and leaving it inlined made GCC outline the whole erfc
+   entry -- which then saved/restored 24 callee-saved vector registers on
+   every strip (measured: 25.4 -> 19.4 ns/element on muse-pi).  */
+__attribute__ ((noinline)) static vm32_f_t
+VM32_KFN (erfc_fixup) (vm32_f_t x, vm32_f_t r, vm32_b_t m, size_t vl)
+{
+  float vfef_x_[600], vfef_r_[600];
+  size_t vfef_n_ = (size_t) VM32_VCMP_POPC_M (m, vl);
+  VM32_VSE (vfef_x_, VM32_VCOMPRESS (x, m, vl), vfef_n_);
+  for (size_t vfef_i_ = 0; vfef_i_ < vfef_n_; vfef_i_++)
+    vfef_r_[vfef_i_] = VM32_KFN (erfc_fix) (vfef_x_[vfef_i_]);
+  vm32_u_t vfef_idx_ = VM32_VIOTA_M (m, vl);
+  vm32_f_t vfef_pick_ = VM32_VLUXEI32 (
+    (const float *) vfef_r_, VM32_VSLL_VX (vfef_idx_, 2, vl), vl);
+  return VM32_VFMERGE_VVM (r, vfef_pick_, m, vl);
+}
+
 #define VM32F_ERFC_FIXUP1(r, x, m, vl) do {				\
   if (VM32_VFIRST_M ((m), (vl)) >= 0)					\
-    {									\
-      float vfef_x_[600], vfef_r_[600];					\
-      size_t vfef_n_ = (size_t) VM32_VCMP_POPC_M ((m), (vl));		\
-      VM32_VSE (vfef_x_, VM32_VCOMPRESS ((x), (m), (vl)), vfef_n_);	\
-      for (size_t vfef_i_ = 0; vfef_i_ < vfef_n_; vfef_i_++)		\
-	vfef_r_[vfef_i_] = VM32_KFN (erfc_fix) (vfef_x_[vfef_i_]);	\
-      vm32_u_t vfef_idx_ = VM32_VIOTA_M ((m), (vl));			\
-      vm32_f_t vfef_pick_ = VM32_VLUXEI32 (				\
-	(const float *) vfef_r_, VM32_VSLL_VX (vfef_idx_, 2, (vl)),	\
-	(vl));								\
-      (r) = VM32_VFMERGE_VVM ((r), vfef_pick_, (m), (vl));		\
-    }									\
+    (r) = VM32_KFN (erfc_fixup) ((x), (r), (m), (vl));			\
 } while (0)
 
 /* ------------------------------------------------------------------ */

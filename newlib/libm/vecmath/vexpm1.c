@@ -10,7 +10,7 @@
 #include <riscv_vector.h>
 #include <math.h>
 
-#define VM_LMUL 2	/* native LMUL for the expm1 kernel.  */
+#define VM_LMUL 1	/* native LMUL for the expm1 kernel.  */
 #include <vecmath_rvvcompat.h>
 #include "vecmath_local.h"
 #include <k_expm1.inc>

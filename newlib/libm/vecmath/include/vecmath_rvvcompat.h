@@ -76,6 +76,8 @@
 #undef VM_VFNMSAC_VV
 #undef VM_VFNMSAC_VF
 #undef VM_VFSQRT_V
+#undef VM_VFREC7_V
+#undef VM_VFRSQRT7_V
 #undef VM_VFABS_V
 #undef VM_VFNEG_V
 #undef VM_VFSGNJ_VV
@@ -308,6 +310,8 @@
 #define VM_VFNMSAC_VV(d, a, b, vl) VM_F64FN(vfnmsac_vv_)(d, a, b, vl)
 #define VM_VFNMSAC_VF(d, s, b, vl) VM_F64FN(vfnmsac_vf_)(d, s, b, vl)
 #define VM_VFSQRT_V(a, vl)     VM_F64FN(vfsqrt_v_)(a, vl)
+#define VM_VFREC7_V(a, vl)     VM_F64FN(vfrec7_v_)(a, vl)
+#define VM_VFRSQRT7_V(a, vl)   VM_F64FN(vfrsqrt7_v_)(a, vl)
 #define VM_VFABS_V(a, vl)      VM_F64FN(vfabs_v_)(a, vl)
 #define VM_VFNEG_V(a, vl)      VM_F64FN(vfneg_v_)(a, vl)
 #define VM_VFSGNJ_VV(a, b, vl)  VM_F64FN(vfsgnj_vv_)(a, b, vl)

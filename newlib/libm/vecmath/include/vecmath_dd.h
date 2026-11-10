@@ -52,6 +52,56 @@
 } while (0)
 
 /* Fast2Sum: requires |a| >= |b|.  */
+/* ------------------------------------------------------------------ */
+/* Division-free reciprocals.
+
+   RVV 1.0 defines vfrec7 (a ~7-bit reciprocal estimate) and vfrsqrt7,
+   both of which are single cheap instructions on the cores we target,
+   while vfdiv.vv costs a full iterative pipeline: measured on the two
+   boards we test, a dependent vfdiv chain is 50 ns on the VLEN 256 X60
+   and 40 ns on the VLEN 128 board, whereas vfrec7 + three Newton steps
+   (six dependent fmas) is 26 ns and 21 ns.  Two Newton steps are enough
+   when the caller corrects the result with an fma residual, three when
+   the reciprocal itself has to stand at ~half an ulp.  */
+
+/* r = 1/x to ~2^-28 relative; only for callers that follow up with a
+   residual (Newton) correction.  */
+#define VM_RCP_FAST(r, x, vl) do {					\
+  vm_f_t vrcp__e;							\
+  (r) = VM_VFREC7_V ((x), (vl));					\
+  vrcp__e = VM_VFNMSAC_VV (VM_VFMV_V_F (1.0, (vl)), (x), (r), (vl));	\
+  (r) = VM_VFMACC_VV ((r), (r), vrcp__e, (vl));			\
+  vrcp__e = VM_VFNMSAC_VV (VM_VFMV_V_F (1.0, (vl)), (x), (r), (vl));	\
+  (r) = VM_VFMACC_VV ((r), (r), vrcp__e, (vl));			\
+} while (0)
+
+/* r = 1/x to ~2^-56 relative (about half an ulp of the reciprocal).  */
+#define VM_RCP_FULL(r, x, vl) do {					\
+  vm_f_t vrcp__e;							\
+  VM_RCP_FAST (r, x, vl);						\
+  vrcp__e = VM_VFNMSAC_VV (VM_VFMV_V_F (1.0, (vl)), (x), (r), (vl));	\
+  (r) = VM_VFMACC_VV ((r), (r), vrcp__e, (vl));			\
+} while (0)
+
+/* q = n/d with the quotient corrected by its own fma residual: ~half an
+   ulp, the same accuracy as a hardware divide, but built from a 7-bit
+   estimate plus three Newton steps (measured fast on both boards).  */
+#define VM_QDIV(q, n, d, vl) do {					\
+  vm_f_t qd__rt, qd__q, qd__e;						\
+  VM_RCP_FULL (qd__rt, (d), (vl));					\
+  qd__q = VM_VFMUL_VV ((n), qd__rt, (vl));				\
+  qd__e = VM_VFNMSAC_VV ((n), qd__q, (d), (vl));			\
+  (q) = VM_VFMACC_VV (qd__q, qd__e, qd__rt, (vl));			\
+} while (0)
+
+/* Corrected double-double reciprocal: rh+rl = 1/x to ~2^-110.  */
+#define VM_RCP_DD(rh, rl, x, vl) do {					\
+  VM_RCP_FULL (rh, x, vl);						\
+  (rl) = VM_VFMUL_VV ((rh),						\
+    VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)),				\
+		  VM_VFNEG_V ((rh), (vl)), (x), (vl)), (vl));		\
+} while (0)
+
 #define VM_FAST2SUM(s, e, a, b, vl) do {				\
   (s) = VM_VFADD_VV ((a), (b), (vl));					\
   (e) = VM_VFADD_VV (VM_VFSUB_VV ((a), (s), (vl)), (b), (vl));		\

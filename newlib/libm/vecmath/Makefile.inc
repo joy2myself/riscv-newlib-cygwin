@@ -11,6 +11,7 @@
 	%D%/vsin.c \
 	%D%/vsinpi.c \
 	%D%/vatan.c \
+	%D%/vatan2pi.c \
 	%D%/vhyper.c \
 	%D%/vhyperinv.c \
 	%D%/vhypot.c \
