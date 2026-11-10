@@ -224,64 +224,95 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
   vm_b_t me_erx = VM_VMSLTU_VX (vau, VM_ERF_B125, vl);
   vm_b_t me_tail = VM_VMSLTU_VX (vau, VM_ERF_B6, vl);
 
+  /* One reciprocal serves the two tail divisions (s = 1/x^2 and the
+     final /|x|).  Only the 1.25 <= |x| < 6 lanes need it, so the other
+     lanes divide 1 by 1: that keeps the divide, underflow and overflow
+     flags of a lane whose answer never uses the reciprocal.  */
+  vm_b_t me_tailb = VM_VMAND_MM (me_tail, VM_VMNOT_M (me_erx, vl), vl);
+  vm_f_t vet_rt = VM_VFRDIV_VF (VM_VFMERGE_VVM (vone, vax, me_tailb, vl),
+				1.0, vl);
+
   /* |x| < 2^-28: x * 2/sqrt(pi) */
   vm_f_t vet_tiny = VM_VFMUL_VF (VM_VFMERGE_VVM (vzero, x, me_tiny, vl),
 				 VM_ERF_C2SPI, vl);
 
   /* |x| < 0.84375: x + x*R(x^2); tiny lanes excluded so x^2 cannot
      underflow on a lane whose answer is not tiny.  */
-  vm_b_t me_poly2 = VM_VMAND_MM (me_poly, VM_VMNOT_M (me_tiny, vl), vl);
-  vm_f_t vet_small;
-  VM_ERF_SMALL (vet_small, VM_VFMERGE_VVM (vzero, x, me_poly2, vl), vl);
+  vm_f_t vet_small = vzero;
+  if (VM_VFIRST_M (VM_VMAND_MM (me_poly, VM_VMNOT_M (me_tiny, vl), (vl)),
+		   (vl)) >= 0)
+    {
+      vm_b_t me_poly2 = VM_VMAND_MM (me_poly, VM_VMNOT_M (me_tiny, (vl)), (vl));
+      VM_ERF_SMALL (vet_small, VM_VFMERGE_VVM (vzero, x, me_poly2, (vl)), (vl));
+    }
 
   /* 0.84375 <= |x| < 1.25: sign(x)*(erx + P1(s)/Q1(s)) */
-  vm_b_t me_erx2 = VM_VMAND_MM (me_erx, VM_VMNOT_M (me_poly, vl), vl);
-  vm_f_t vet_sm = VM_VFSUB_VF (VM_VFMERGE_VVM (vzero, vax, me_erx2, vl),
-			       1.0, vl);
-  vm_f_t vet_erx, vet_epa, vet_eqa;
-  VM_ERF_HOR (vet_epa, vm_erf_pa, 7, vet_sm, vl);
-  VM_ERF_HOR (vet_eqa, vm_erf_qa, 6, vet_sm, vl);
-  vet_eqa = VM_VFMACC_VV (vone, vet_sm, vet_eqa, vl);
-  vet_erx = VM_VFADD_VF (VM_VFDIV_VV (vet_epa, vet_eqa, vl), VM_ERF_ERX_CONST, vl);
-  vet_erx = VM_VFSGNJ_VV (vet_erx, x, vl);
+  vm_f_t vet_erx = vzero;
+  if (VM_VFIRST_M (VM_VMAND_MM (me_erx, VM_VMNOT_M (me_poly, (vl)), (vl)),
+		   (vl)) >= 0)
+    {
+      vm_b_t me_erx2 = VM_VMAND_MM (me_erx, VM_VMNOT_M (me_poly, (vl)), (vl));
+      vm_f_t vet_sm = VM_VFSUB_VF (VM_VFMERGE_VVM (vzero, vax, me_erx2, (vl)),
+				   1.0, (vl));
+      vm_f_t vet_epa, vet_eqa;
+      VM_ERF_HOR (vet_epa, vm_erf_pa, 7, vet_sm, (vl));
+      VM_ERF_HOR (vet_eqa, vm_erf_qa, 6, vet_sm, (vl));
+      vet_eqa = VM_VFMACC_VV (vone, vet_sm, vet_eqa, (vl));
+      vet_erx = VM_VFADD_VF (VM_VFDIV_VV (vet_epa, vet_eqa, (vl)),
+			     VM_ERF_ERX_CONST, (vl));
+      vet_erx = VM_VFSGNJ_VV (vet_erx, x, (vl));
+    }
 
   /* 1.25 <= |x| < 6: sign(x)*(1 - exp(-z^2-0.5625+d2+R/S)/|x|),
      z = |x| with the low word cleared, d2 = z^2-x^2.  The single exp is
      good enough: q = erfc(|x|) <= 0.0771 here, so an argument rounding
-     of half an ulp of -z^2-0.5625 is at most 0.34 of the q budget.  */
-  vm_b_t me_tail2 = VM_VMAND_MM (me_tail, VM_VMNOT_M (me_erx, vl), vl);
-  vm_f_t vet_tv;
-  {
-    vm_f_t vet_xt = VM_VFMERGE_VVM (vone, vax, me_tail2, vl);
-    vm_f_t vet_zz = VM_FROM_BITS (VM_VAND_VX (VM_BITS (vet_xt),
-					       VM_HIGHWORD_U64, vl));
-    vm_f_t vet_z2 = VM_VFMUL_VV (vet_zz, vet_zz, vl);	/* exact */
-    vm_f_t vet_T = VM_VFSUB_VF (VM_VFNEG_V (vet_z2, vl), 0.5625, vl);
-    vm_f_t vet_d2 = VM_VFMUL_VV (VM_VFSUB_VV (vet_zz, vet_xt, vl),
-				 VM_VFADD_VV (vet_zz, vet_xt, vl), vl);
-    vm_f_t vet_s = VM_VFRDIV_VF (VM_VFMUL_VV (vet_xt, vet_xt, vl), 1.0, vl);
-    vm_b_t vet_rb = VM_VMSGEU_VX (VM_BITS (vet_xt), VM_ERF_B286, vl);
-    vm_f_t vet_rho;
-    VM_ERF_RHO (vet_rho, vet_s, vet_rb, vl);
-    vm_f_t vet_S = VM_VFADD_VV (vet_T, VM_VFADD_VV (vet_d2, vet_rho, vl), vl);
-    vm_f_t vet_scale, vet_tmp;
-    VM_EXP_MAIN (vet_scale, vet_tmp, vet_S, vl);
-    vm_f_t vet_et = VM_VFMACC_VV (vet_scale, vet_scale, vet_tmp, vl);
-    vet_tv = VM_VFRSUB_VF (VM_VFDIV_VV (vet_et, vet_xt, vl), 1.0, vl);
-    vet_tv = VM_VFSGNJ_VV (vet_tv, x, vl);
-  }
+     of half an ulp of -z^2-0.5625 is at most 0.34 of the q budget.
+     1/x^2 and 1/|x| come from the shared reciprocal.  */
+  vm_f_t vet_tv = vzero;
+  if (VM_VFIRST_M (VM_VMAND_MM (me_tail, VM_VMNOT_M (me_erx, (vl)), (vl)),
+		   (vl)) >= 0)
+    {
+      vm_b_t me_tail2 = me_tailb;
+      vm_f_t vet_xt = VM_VFMERGE_VVM (vone, vax, me_tail2, (vl));
+      vm_f_t vet_z = VM_FROM_BITS (VM_VAND_VX (VM_BITS (vet_xt),
+					       VM_HIGHWORD_U64, (vl)));
+      vm_f_t vet_z2 = VM_VFMUL_VV (vet_z, vet_z, (vl));	/* exact */
+      vm_f_t vet_T = VM_VFSUB_VF (VM_VFNEG_V (vet_z2, (vl)), 0.5625, (vl));
+      vm_f_t vet_d2 = VM_VFMUL_VV (VM_VFSUB_VV (vet_z, vet_xt, (vl)),
+				   VM_VFADD_VV (vet_z, vet_xt, (vl)), (vl));
+      vm_f_t vet_s = VM_VFMUL_VV (vet_rt, vet_rt, (vl));
+      vm_b_t vet_rb = VM_VMSGEU_VX (VM_BITS (vet_xt), VM_ERF_B286, (vl));
+      vm_f_t vet_rho;
+      VM_ERF_RHO (vet_rho, vet_s, vet_rb, (vl));
+      vm_f_t vet_S = VM_VFADD_VV (vet_T, VM_VFADD_VV (vet_d2, vet_rho, (vl)),
+				  (vl));
+      vm_f_t vet_scale, vet_tmp;
+      VM_EXP_MAIN (vet_scale, vet_tmp, vet_S, (vl));
+      vm_f_t vet_et = VM_VFMACC_VV (vet_scale, vet_scale, vet_tmp, (vl));
+      vet_tv = VM_VFRSUB_VF (VM_VFMUL_VV (vet_et, vet_rt, (vl)), 1.0, (vl));
+      vet_tv = VM_VFSGNJ_VV (vet_tv, x, (vl));
+    }
 
   /* |x| >= 6 (finite): sign(x); NaN/Inf: sign(x) + 1/x */
-  vm_f_t vet_big = VM_VFSGNJ_VV (vone, x, vl);
-  vm_f_t vet_inv = VM_VFRDIV_VF (VM_VFMERGE_VVM (vone, x, me_spec, vl),
-				 1.0, vl);
-  vm_f_t vet_spec = VM_VFADD_VV (vet_big, vet_inv, vl);
+  vm_f_t vet_big = VM_VFSGNJ_VV (vone, x, (vl));
+  vm_f_t vet_spec = vet_big;
+  if (VM_VFIRST_M (me_spec, (vl)) >= 0)
+    {
+      vm_f_t vet_inv = VM_VFRDIV_VF (VM_VFMERGE_VVM (vone, x, me_spec, (vl)),
+				     1.0, (vl));
+      vet_spec = VM_VFADD_VV (vet_big, vet_inv, (vl));
+    }
 
-  vm_f_t vet_res = VM_VFMERGE_VVM (vet_small, vet_erx, me_erx2, vl);
-  vet_res = VM_VFMERGE_VVM (vet_res, vet_tv, me_tail2, vl);
-  vet_res = VM_VFMERGE_VVM (vet_res, vet_tiny, me_tiny, vl);
-  vet_res = VM_VFMERGE_VVM (vet_res, vet_big, VM_VMNOT_M (me_tail, vl), vl);
-  vet_res = VM_VFMERGE_VVM (vet_res, vet_spec, me_spec, vl);
+  vm_f_t vet_res = VM_VFMERGE_VVM (vet_small, vet_erx,
+				   VM_VMAND_MM (me_erx,
+						VM_VMNOT_M (me_poly, (vl)),
+						(vl)), (vl));
+  vet_res = VM_VFMERGE_VVM (vet_res, vet_tv,
+			    VM_VMAND_MM (me_tail, VM_VMNOT_M (me_erx, (vl)), (vl)),
+			    (vl));
+  vet_res = VM_VFMERGE_VVM (vet_res, vet_tiny, me_tiny, (vl));
+  vet_res = VM_VFMERGE_VVM (vet_res, vet_big, VM_VMNOT_M (me_tail, (vl)), (vl));
+  vet_res = VM_VFMERGE_VVM (vet_res, vet_spec, me_spec, (vl));
   return vet_res;
 }
 
