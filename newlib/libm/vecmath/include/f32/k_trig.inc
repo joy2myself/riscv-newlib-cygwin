@@ -164,6 +164,23 @@
 #define VM32_FALLBACK1(name, x, vl)					\
   VM32_NARROW (VM32_D64 (name) (VM32_WIDEN ((x), (vl)), (vl)), (vl))
 
+/* The same fallback as a call, for the entries whose binary64 kernel is
+   large enough to bloat the strip loop when inlined: the whole function
+   *is* the strip loop (there is no outer prologue), so an inlined
+   fallback's ~2-4 KiB of vector code sits inside it and costs fetch
+   bandwidth on every iteration even though the branch is never taken.
+   noinline is safe here -- the fallback is the previous widen / binary64
+   kernel / narrow path verbatim, and the merge is still per lane.  */
+#define VM32_FALLBACK1_TCALL(name, x, vl)				\
+  VM32_KFN (name##_wide) ((x), (vl))
+
+#define VM32_DEF_WIDE1(name)						\
+  __attribute__ ((noinline)) static vm32_f_t				\
+  VM32_KFN (name##_wide) (vm32_f_t x, size_t vl)			\
+  {									\
+    return VM32_FALLBACK1 (name, x, vl);				\
+  }
+
 /* ==================================================================== */
 /* quadrant select (applied to the hi and lo words alike)               */
 /* ==================================================================== */
@@ -238,6 +255,8 @@
     (fast) = VM32_VFMERGE_VVM ((fast), (wide), (bad), (vl));		\
 } while (0)
 
+VM32_DEF_WIDE1 (sin)
+
 static inline vm32_f_t
 VM32_KFN (sin) (vm32_f_t x, size_t vl)
 {
@@ -258,9 +277,11 @@ VM32_KFN (sin) (vm32_f_t x, size_t vl)
   VM32_TRIG_SIN2 (q, sh, sl, ch, cl, oh, ol, vl);
   vm32_f_t r = VM32_VFADD_VV (oh, ol, vl);
   r = VM32_VFSGNJX_VV (r, xs, vl);
-  VM32_FAST_OR_WIDE (r, VM32_FALLBACK1 (sin, x, vl), mbad, vl);
+  VM32_FAST_OR_WIDE (r, VM32_FALLBACK1_TCALL (sin, x, vl), mbad, vl);
   return r;
 }
+
+VM32_DEF_WIDE1 (cos)
 
 static inline vm32_f_t
 VM32_KFN (cos) (vm32_f_t x, size_t vl)
@@ -281,9 +302,11 @@ VM32_KFN (cos) (vm32_f_t x, size_t vl)
   vm32_f_t oh, ol;
   VM32_TRIG_COS2 (q, sh, sl, ch, cl, oh, ol, vl);
   vm32_f_t r = VM32_VFADD_VV (oh, ol, vl);
-  VM32_FAST_OR_WIDE (r, VM32_FALLBACK1 (cos, x, vl), mbad, vl);
+  VM32_FAST_OR_WIDE (r, VM32_FALLBACK1_TCALL (cos, x, vl), mbad, vl);
   return r;
 }
+
+VM32_DEF_WIDE1 (tan)
 
 static inline vm32_f_t
 VM32_KFN (tan) (vm32_f_t x, size_t vl)
@@ -303,7 +326,7 @@ VM32_KFN (tan) (vm32_f_t x, size_t vl)
   vm32_u_t q = VM32_TRIG_Q (n, vl);
   vm32_f_t r;
   VM32_TRIG_TAN2 (q, sh, sl, ch, cl, r, xs, vl);
-  VM32_FAST_OR_WIDE (r, VM32_FALLBACK1 (tan, x, vl), mbad, vl);
+  VM32_FAST_OR_WIDE (r, VM32_FALLBACK1_TCALL (tan, x, vl), mbad, vl);
   return r;
 }
 
@@ -335,6 +358,8 @@ VM32_KFN (tan) (vm32_f_t x, size_t vl)
   (xso) = VM32_VFMERGE_VFM ((x), 0.5f, (mbado), (vl));			\
 } while (0)
 
+VM32_DEF_WIDE1 (sinpi)
+
 static inline vm32_f_t
 VM32_KFN (sinpi) (vm32_f_t x, size_t vl)
 {
@@ -354,9 +379,11 @@ VM32_KFN (sinpi) (vm32_f_t x, size_t vl)
   vm32_f_t oh, ol;
   VM32_TRIG_SIN2 (q, sh, sl, ch, cl, oh, ol, vl);
   vm32_f_t out = VM32_VFADD_VV (oh, ol, vl);
-  VM32_FAST_OR_WIDE (out, VM32_FALLBACK1 (sinpi, x, vl), mbad, vl);
+  VM32_FAST_OR_WIDE (out, VM32_FALLBACK1_TCALL (sinpi, x, vl), mbad, vl);
   return out;
 }
+
+VM32_DEF_WIDE1 (cospi)
 
 static inline vm32_f_t
 VM32_KFN (cospi) (vm32_f_t x, size_t vl)
@@ -377,9 +404,11 @@ VM32_KFN (cospi) (vm32_f_t x, size_t vl)
   vm32_f_t oh, ol;
   VM32_TRIG_COS2 (q, sh, sl, ch, cl, oh, ol, vl);
   vm32_f_t out = VM32_VFADD_VV (oh, ol, vl);
-  VM32_FAST_OR_WIDE (out, VM32_FALLBACK1 (cospi, x, vl), mbad, vl);
+  VM32_FAST_OR_WIDE (out, VM32_FALLBACK1_TCALL (cospi, x, vl), mbad, vl);
   return out;
 }
+
+VM32_DEF_WIDE1 (tanpi)
 
 static inline vm32_f_t
 VM32_KFN (tanpi) (vm32_f_t x, size_t vl)
@@ -403,13 +432,42 @@ VM32_KFN (tanpi) (vm32_f_t x, size_t vl)
   vm32_u_t q = VM32_TRIG_Q (q2, vl);
   vm32_f_t t;
   VM32_TRIG_TAN2 (q, sh, sl, ch, cl, t, VM32_VFMV_V_F (1.0f, vl), vl);
-  VM32_FAST_OR_WIDE (t, VM32_FALLBACK1 (tanpi, x, vl), mbad, vl);
+  VM32_FAST_OR_WIDE (t, VM32_FALLBACK1_TCALL (tanpi, x, vl), mbad, vl);
   return t;
 }
 
 /* ==================================================================== */
 /* fused two-output kernels                                             */
 /* ==================================================================== */
+
+/* The fused entries' wide fallback, also out of the strip loop.  RVV
+   types are not allowed as struct fields, so the two results come back
+   through pointers (a stack round-trip on the cold path only).
+
+   The binary64 macro VM_SINCOS is bound to the *including* TU's VM_LMUL,
+   which is 2*VM32_LMUL in the array-API TUs but is left at 8 by
+   vfabi32.c while it instantiates VM32_LMUL = 1, 2, 4; the helper is
+   therefore only defined where the two agree.  vfabi32.c never expands
+   VM32_SINCOS, so nothing is missing there.  */
+#if VM_LMUL == VM32_D64M
+__attribute__ ((noinline)) static void
+VM32_KFN (sincos_wide) (vm32_f_t x, size_t vl, vm32_f_t *so, vm32_f_t *co)
+{
+  vm_f_t ws, wc;
+  VM_SINCOS (ws, wc, VM32_WIDEN (x, vl), (vl));
+  *so = VM32_NARROW (ws, vl);
+  *co = VM32_NARROW (wc, vl);
+}
+
+__attribute__ ((noinline)) static void
+VM32_KFN (sincospi_wide) (vm32_f_t x, size_t vl, vm32_f_t *so, vm32_f_t *co)
+{
+  vm_f_t ws, wc;
+  VM_SINCOSPI (ws, wc, VM32_WIDEN (x, vl), VM_PI_ALL ((vl)), (vl));
+  *so = VM32_NARROW (ws, vl);
+  *co = VM32_NARROW (wc, vl);
+}
+#endif
 
 #define VM32_SINCOS(syo, cyo, x, vl) do {				\
   vm32_u_t vmsc32__ax = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffu, (vl)); \
@@ -437,13 +495,11 @@ VM32_KFN (tanpi) (vm32_f_t x, size_t vl)
     vmsc32__s = VM32_VFSGNJX_VV (vmsc32__s, vmsc32__xs, (vl));		\
     if (VM32_VFIRST_M (vmsc32__bad, (vl)) >= 0)				\
       {									\
-	vm_f_t vmsc32__ws, vmsc32__wc;					\
-	VM_SINCOS (vmsc32__ws, vmsc32__wc, VM32_WIDEN ((x), (vl)), (vl)); \
-	vm32_f_t vmsc32__rw = VM32_NARROW (vmsc32__ws, (vl));		\
-	vm32_f_t vmsc32__cw = VM32_NARROW (vmsc32__wc, (vl));		\
-	vmsc32__s = VM32_VFMERGE_VVM (vmsc32__s, vmsc32__rw,		\
+	vm32_f_t vmsc32__ws, vmsc32__wc;				\
+	VM32_KFN (sincos_wide) ((x), (vl), &vmsc32__ws, &vmsc32__wc);	\
+	vmsc32__s = VM32_VFMERGE_VVM (vmsc32__s, vmsc32__ws,		\
 				     vmsc32__bad, (vl));		\
-	vmsc32__c = VM32_VFMERGE_VVM (vmsc32__c, vmsc32__cw,		\
+	vmsc32__c = VM32_VFMERGE_VVM (vmsc32__c, vmsc32__wc,		\
 				     vmsc32__bad, (vl));		\
       }									\
     (syo) = vmsc32__s;							\
@@ -479,14 +535,12 @@ VM32_KFN (tanpi) (vm32_f_t x, size_t vl)
     vm32_f_t vmscp32__c = VM32_VFADD_VV (vmscp32__cn, vmscp32__cl2, (vl)); \
     if (VM32_VFIRST_M (vmscp32__bad, (vl)) >= 0)			\
       {									\
-	vm_f_t vmscp32__ws, vmscp32__wc;				\
-	VM_SINCOSPI (vmscp32__ws, vmscp32__wc, VM32_WIDEN ((x), (vl)),	\
-		     VM_PI_ALL ((vl)), (vl));				\
-	vm32_f_t vmscp32__rw = VM32_NARROW (vmscp32__ws, (vl));		\
-	vm32_f_t vmscp32__cw = VM32_NARROW (vmscp32__wc, (vl));		\
-	vmscp32__s = VM32_VFMERGE_VVM (vmscp32__s, vmscp32__rw,		\
+	vm32_f_t vmscp32__ws, vmscp32__wc;				\
+	VM32_KFN (sincospi_wide) ((x), (vl), &vmscp32__ws,		\
+				  &vmscp32__wc);			\
+	vmscp32__s = VM32_VFMERGE_VVM (vmscp32__s, vmscp32__ws,	\
 				       vmscp32__bad, (vl));		\
-	vmscp32__c = VM32_VFMERGE_VVM (vmscp32__c, vmscp32__cw,		\
+	vmscp32__c = VM32_VFMERGE_VVM (vmscp32__c, vmscp32__wc,		\
 				       vmscp32__bad, (vl));		\
       }									\
     (syo) = vmscp32__s;							\
