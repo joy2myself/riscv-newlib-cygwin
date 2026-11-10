@@ -140,53 +140,53 @@ the scalar baseline. The mean speedup is 3.08x; the slowest entry is
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrt | 0.5000 | 4.46x | asin | 0.6383 | 2.10x |
-| rsqrt | 0.8612 | 2.97x | acos | 0.6409 | 1.92x |
-| cbrt | 0.6645 | 3.55x | atan | 0.5927 | 1.79x |
-| exp | 0.5030 | 4.00x | atan2 | 0.7242 | 1.36x |
-| exp2 | 0.5038 | 3.70x | asinpi | 1.0000 | 1.87x |
-| exp10 | 0.5034 | 3.74x | acospi | 0.6624 | 1.75x |
-| expm1 | 0.8130 | 2.00x | atanpi | 1.0000 | 1.42x |
-| log | 0.7290 | 2.24x | atan2pi | 1.0000 | 1.11x |
-| log2 | 0.6888 | 1.78x | sinh | 0.6446 | 4.18x |
-| log10 | 0.9091 | 2.82x | cosh | 0.5645 | 2.97x |
-| log1p | 0.5890 | 2.12x | tanh | 0.5230 | 3.43x |
-| log2p1 | 1.0000 | 1.38x | asinh | 0.9076 | 1.68x |
-| pow | 0.5053 | 3.43x | acosh | 0.9352 | 1.64x |
-| sin | 0.7852 | 2.69x | atanh | 0.9885 | 2.38x |
+| sqrt | 0.5000 | 4.44x | asin | 0.6383 | 1.69x |
+| rsqrt | 0.8612 | 2.96x | acos | 0.6409 | 1.77x |
+| cbrt | 0.6645 | 3.53x | atan | 0.5927 | 1.59x |
+| exp | 0.5030 | 3.99x | atan2 | 0.7242 | 1.28x |
+| exp2 | 0.5038 | 3.48x | asinpi | 1.0000 | 1.51x |
+| exp10 | 0.5034 | 3.99x | acospi | 0.6624 | 1.58x |
+| expm1 | 0.8130 | 2.04x | atanpi | 1.0000 | 1.27x |
+| log | 0.7290 | 2.23x | atan2pi | 1.0000 | 1.10x |
+| log2 | 0.6888 | 1.78x | sinh | 0.6446 | 4.16x |
+| log10 | 0.9091 | 2.79x | cosh | 0.5645 | 2.98x |
+| log1p | 0.5890 | 2.62x | tanh | 0.5230 | 3.41x |
+| log2p1 | 1.0000 | 1.37x | asinh | 0.9076 | 2.07x |
+| pow | 0.5053 | 3.42x | acosh | 0.9352 | 1.82x |
+| sin | 0.7852 | 2.70x | atanh | 0.9885 | 3.17x |
 | cos | 0.7846 | 2.56x | hypot | 0.5000 | 2.39x |
 | tan | 0.7376 | 2.34x | erf | 1.0000 | 1.40x |
-| sincos | 0.8345 | 3.65x | erfc | 0.8440 | 1.24x |
-| sinpi | 1.0000 | 2.69x | tgamma | 1.0000 | 3.27x |
-| cospi | 0.8067 | 2.51x | lgamma | 0.8505 | 1.39x |
-| tanpi | 1.0000 | 2.67x | lgamma_r | 0.5619 | 1.44x |
+| sincos | 0.8345 | 3.71x | erfc | 0.8440 | 1.26x |
+| sinpi | 1.0000 | 2.69x | tgamma | 1.0000 | 3.25x |
+| cospi | 0.8067 | 2.49x | lgamma | 0.8505 | 1.39x |
+| tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.45x |
 | sincospi | 1.0000 | 3.77x |  | |  |
 
 The binary32 entries:
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrtf | 0.5000 | 7.09x | asinf | 0.8136 | 3.34x |
-| rsqrtf | 0.5000 | 2.16x | acosf | 0.8893 | 4.30x |
-| cbrtf | 0.5000 | 1.46x | atanf | 0.8238 | 4.52x |
-| expf | 0.5257 | 6.26x | atan2f | 0.5000 | 1.48x |
-| exp2f | 0.5000 | 3.46x | asinpif | 0.8055 | 3.47x |
+| sqrtf | 0.5000 | 6.99x | asinf | 0.8136 | 3.33x |
+| rsqrtf | 0.5000 | 2.15x | acosf | 0.8893 | 4.30x |
+| cbrtf | 0.5000 | 1.46x | atanf | 0.8238 | 4.53x |
+| expf | 0.5257 | 6.15x | atan2f | 0.5000 | 1.47x |
+| exp2f | 0.5000 | 3.46x | asinpif | 0.8055 | 3.46x |
 | exp10f | 0.5000 | 3.51x | acospif | 0.5000 | 1.45x |
-| expm1f | 0.6321 | 4.82x | atanpif | 0.8251 | 5.09x |
-| logf | 0.5106 | 2.89x | atan2pif | 0.5000 | 1.82x |
-| log2f | 0.5340 | 2.79x | sinhf | 0.6741 | 5.80x |
-| log10f | 0.5279 | 5.42x | coshf | 0.5365 | 6.37x |
-| log1pf | 0.5796 | 3.33x | tanhf | 0.6855 | 3.28x |
-| log2p1f | 0.5523 | 2.26x | asinhf | 0.5238 | 2.84x |
-| powf | 0.5000 | 2.31x | acoshf | 0.5055 | 3.80x |
-| sinf | 0.5812 | 3.05x | atanhf | 0.5362 | 4.41x |
-| cosf | 0.5812 | 3.08x | hypotf | 0.5000 | 4.10x |
-| tanf | 0.6537 | 3.67x | erff | 0.5005 | 1.54x |
-| sincosf | 0.5916 | 4.36x | erfcf | 0.5312 | 1.68x |
-| sinpif | 0.5802 | 3.12x | tgammaf | 0.5002 | 6.73x |
+| expm1f | 0.6321 | 4.82x | atanpif | 0.8251 | 5.10x |
+| logf | 0.5106 | 2.93x | atan2pif | 0.5000 | 1.80x |
+| log2f | 0.5340 | 2.85x | sinhf | 0.6741 | 5.81x |
+| log10f | 0.5279 | 5.42x | coshf | 0.5365 | 6.35x |
+| log1pf | 0.5796 | 3.36x | tanhf | 0.6855 | 3.22x |
+| log2p1f | 0.5523 | 2.28x | asinhf | 0.5238 | 2.84x |
+| powf | 0.5000 | 2.29x | acoshf | 0.5055 | 3.80x |
+| sinf | 0.5812 | 3.06x | atanhf | 0.5362 | 4.26x |
+| cosf | 0.5812 | 3.08x | hypotf | 0.5000 | 4.09x |
+| tanf | 0.6537 | 3.65x | erff | 0.5005 | 1.52x |
+| sincosf | 0.5916 | 4.27x | erfcf | 0.5312 | 1.68x |
+| sinpif | 0.5802 | 3.06x | tgammaf | 0.5002 | 6.76x |
 | cospif | 0.5627 | 2.44x | lgammaf | 0.5011 | 4.80x |
-| tanpif | 0.6965 | 3.72x | lgamma_rf | 0.5011 | 3.90x |
-| sincospif | 0.6040 | 4.68x |  | |  |
+| tanpif | 0.6965 | 3.72x | lgamma_rf | 0.5011 | 3.98x |
+| sincospif | 0.6040 | 4.57x |  | |  |
 
 Starred entries reach exactly 1.0 ulp, which the contract admits: they
 round twice, once at 53-bit precision in a scaled domain and then onto
@@ -237,6 +237,42 @@ lanes), or they are `exp` of a very large `lgamma` (`tgamma`).
   `atanf` 16.3 -> 19.2 ns/element), and inside `atan2`'s larger inlined
   expression the two-division form schedules better.
 
+* **Hardware divides were the most expensive instruction in the library.**
+  On the VLEN 256 board a *dependent* `vfdiv` chain costs 50 ns per strip
+  and on the VLEN 128 board 40 ns, against 26/21 ns for `vfrec7` plus three
+  Newton steps.  `include/vecmath_dd.h` now provides `VM_RCP_FAST` (two
+  steps, for callers that add their own fma residual), `VM_RCP_FULL`
+  (three steps, half an ulp), `VM_RCP_DD` (corrected pair) and `VM_QDIV`
+  (quotient with its own residual correction, the same accuracy as a
+  divide).  In use for `atan`/`atanpi` (54.3 -> 48.5 ns/element), `log1p`
+  (56.8 -> 45.8, two divides collapsed into one corrected quotient and one
+  true divide kept for the subnormal `1+x` case) and `erfc`.  A reciprocal
+  estimate of a subnormal yields infinity and raises flags the reference
+  does not, so every site is checked for a bounded divisor.
+
+* **The optimal LMUL is per function, and it is not the same on both
+  boards.**  RVV arithmetic throughput scales linearly with LMUL on both
+  cores, so LMUL only trades loop overhead against register pressure -
+  and the VLEN 128 core runs out of registers first.  Measured on both
+  boards: `vhyperinv.c` and `vexpm1.c` are faster at LMUL 1 (asinh 1.70x ->
+  2.09x, atanh 2.38x -> 3.20x on VLEN 256; asinh 0.66x -> 1.17x on VLEN
+  128), `vlog.c` and `verf.c` are faster at LMUL 2, and the inverse-trig
+  family splits: `atan`/`atan2`/`atanpi`/`acos` want LMUL 1 (a210: 0.55x ->
+  1.23x, 0.30x -> 0.71x) while `atan2pi` wants LMUL 2 (0.78x -> 0.31x at
+  LMUL 1), which is why `atan2pi` now lives in its own translation unit.
+  The choice is static and per translation unit - no runtime dispatch.
+
+## Engineering surveys
+
+`doc/literature-survey.md` and `doc/rvv-survey.md` are the surveys that
+drove the changes above: CORE-MATH, SLEEF, ARM Optimized Routines, RLIBM,
+double-word arithmetic papers, plus measured RVV instruction costs and
+toolchain pitfalls, each claim tagged measured / measured-here / inferred.
+The techniques they recommend and that are *not* yet implemented are listed
+there with estimated gains (atan family table + tangent subtraction, erfc
+odd-only asymptotics, cancellation-free lgamma around its zeros,
+`FastFMA_DW`, native f32 kernels for the remaining widen/narrow entries).
+
 ## A second RVV board (a210, VLEN 128)
 
 The same tree was built and measured on a second RVV 1.0 board: a210
@@ -248,7 +284,7 @@ failures -- same contract as the VLEN 256 board. Per-run reports are in
 The speedups are structurally smaller there, for two reasons: the vector
 unit is half as wide (VLEN 128, so a strip covers half as many lanes)
 while its scalar FPU is roughly twice as fast per element, so the scalar
-baseline is much stronger. Measured mean is 2.79x with 13 of 82 entries
+baseline is much stronger. Measured mean is 2.85x with 10 of 82 entries
 at or under 1.0x when built natively with GCC 14.2
 (`test/results/board-a210/bench-a210-gcc14.md`).
 
