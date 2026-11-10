@@ -383,7 +383,8 @@ VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
      final dd division: the dd-corrected (rt, rt_lo) is good to ~2^-105,
      and s = (rt + rt_lo)^2 rebuilt with one fma keeps that accuracy, so
      the tail does one division where it used to do three.  */
-  vm_f_t mf_rt = VM_VFRDIV_VF (mf_targ, 1.0, (vl));
+  vm_f_t mf_rt;
+  VM_RCP_FULL (mf_rt, mf_targ, (vl));
   vm_f_t mf_rte = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)),
 				VM_VFNEG_V (mf_rt, (vl)), mf_targ, (vl));
   vm_f_t mf_rtl = VM_VFMUL_VV (mf_rt, mf_rte, (vl));

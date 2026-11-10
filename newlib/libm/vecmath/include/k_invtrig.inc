@@ -161,8 +161,8 @@
   vm_f_t vma__r, vma__rr; \
   if ((fastq) && VM_LMUL <= 2) \
     { \
-      vm_f_t vq__rt = VM_VFRDIV_VF ( \
-        VM_VFMUL_VF (vma__rden, 0x1p-600, (vl)), 1.0, (vl)); \
+      vm_f_t vq__rt; \
+      VM_RCP_FULL (vq__rt, VM_VFMUL_VF (vma__rden, 0x1p-600, (vl)), (vl)); \
       vq__rt = VM_VFMUL_VF (vq__rt, 0x1p-600, (vl)); \
       vma__r = VM_VFMUL_VV (vma__rnum, vq__rt, (vl)); \
       vma__rr = VM_VFMUL_VV ( \
