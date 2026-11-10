@@ -135,8 +135,8 @@ hardware (SpaceMiT X60, VLEN 256, 8x1.6 GHz) and under qemu:
 Every one of the 82 entries is within 1 ulp (no lane over 1 ulp, no
 special-class failure, no per-lane flag failure, sweep-stable across
 strip lengths, and identical at every VLEN), and all 82 are faster than
-the scalar baseline. The mean speedup is 3.39x; the slowest entry is
-`atan2pi` at 1.11x and the fastest `sqrtf` at 7.0x.
+the scalar baseline. The mean speedup is 3.43x; the slowest entry is
+`lgamma` at 1.26x and the fastest `tgammaf` at 7.29x.
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
