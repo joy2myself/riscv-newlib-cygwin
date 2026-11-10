@@ -235,7 +235,7 @@ failures -- same contract as the VLEN 256 board. Per-run reports are in
 The speedups are structurally smaller there, for two reasons: the vector
 unit is half as wide (VLEN 128, so a strip covers half as many lanes)
 while its scalar FPU is roughly twice as fast per element, so the scalar
-baseline is much stronger. Measured mean is 2.73x with 11 of 82 entries
+baseline is much stronger. Measured mean is 2.80x with 14 of 82 entries
 at or under 1.0x when built natively with GCC 14.2
 (`test/results/board-a210/bench-a210-gcc14.md`).
 
