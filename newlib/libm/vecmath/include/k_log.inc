@@ -3,27 +3,29 @@
    LMUL-generic template: include after vecmath_rvvcompat.h,
    vecmath_dd.h and vecmath_local.h (k_fixup.inc) with VM_LMUL defined.
 
-   log/log2 vectorize the ARM optimized-routines implementations that are
-   live in newlib for rv64 hard-float (libm/common/log.c, log2.c):
-   table-gather reduction + polynomial, near-1 special polynomial, and a
-   masked scalar fixup for x < 2^-1022 / negative / inf / NaN (covers
-   divzero, invalid and subnormal normalization with exact scalar
-   semantics and flags).
+   log vectorizes the ARM optimized-routines implementation that is live
+   in newlib for rv64 hard-float (libm/common/log.c): table-gather
+   reduction + polynomial, near-1 special polynomial, and a masked scalar
+   fixup for x < 2^-1022 / negative / inf / NaN (covers divzero, invalid
+   and subnormal normalization with exact scalar semantics and flags).
+   log1p is the fdlibm s_log1p.c port.
 
-   log10/log2p1 scale the dd output of log/log1p before the final
-   rounding: log10(x) = log(x)*log10(e), log2p1(x) = log1p(x)/ln2.
+   log2/log2p1 use a table core of their own (below): a 512-entry table
+   of {10-bit reciprocal, log2(1/r) split as a double-double}, one FMA
+   whose residual is exact, and a degree-7 polynomial in that exact
+   residual -- plain double, no division and no double-double combine.
+   log10/log2p1's 1/ln2 and log10's log10(e) scalings are folded into the
+   core rather than applied as a second rounding afterwards.
 
-   Data: own table copies (vm_data.h / tables/), never libm symbols --
-   glibc and newlib order the struct fields differently.  */
+   Data: own table copies (vm_data.h / tables/ / vm_log2_table.h), never
+   libm symbols -- glibc and newlib order the struct fields differently.  */
 
 #include <vm_data.h>
+#include <vm_log2_table.h>
 
 /* log near-1 region: bits(1-2^-4) .. bits(1+0x1.09p-4).  */
 #define VM_LOG_LO	0x3fee000000000000ULL
 #define VM_LOG_HILO	0x0003090000000000ULL
-/* log2 near-1 region: bits(1-0x1.5b51p-5) .. bits(1+0x1.6ab2p-5).  */
-#define VM_LOG2_LO	0x3feea4af00000000ULL
-#define VM_LOG2_HILO	0x000210aa00000000ULL
 /* shared reduction offset (log.c/log2.c OFF).  */
 #define VM_LOG_OFF	0x3fe6000000000000ULL
 
@@ -247,234 +249,110 @@ VM_KFN (log_k) (vm_f_t x, size_t vl, double (*fixup) (double))
 }
 
 /* ------------------------------------------------------------------ */
-/* Arm log.c coefficients pre-divided by ln2 offline (correctly rounded
-   doubles) so the same reduction evaluates log2() directly in log2 units
-   -- no final scaling rounding.  A static table keeps the coefficients in
-   .rodata (one fld per use) instead of a multi-instruction literal.  */
-#ifndef VM_LOG2_SCALED_TAB
-#define VM_LOG2_SCALED_TAB
-static const double __vm_log2_scaled[17] = {
-  /* A0..A4 = log_data.poly / ln2 */
-  -0x1.71547652b8300p-1, 0x1.ec709dc340953p-2, -0x1.71547651c8f35p-2,
-  0x1.2777ebe12dda5p-2, -0x1.ec738d616fe26p-3,
-  /* B0..B10 = log_data.poly1 / ln2 */
-  -0x1.71547652b82fep-1, 0x1.ec709dc3a042ep-2, -0x1.71547652b8167p-2,
-  0x1.2776c50ece9fdp-2, -0x1.ec709dc53e54fp-3, 0x1.a617642fb4fd8p-3,
-  -0x1.7154722fe1de8p-3, 0x1.48480f16355b5p-3, -0x1.277a7397dd39ap-3,
-  0x1.0f4b791a43a6dp-3, -0x1.ec256d5ede7cdp-4,
-};
-#define VM_L2A0 __vm_log2_scaled[0]
-#define VM_L2A1 __vm_log2_scaled[1]
-#define VM_L2A2 __vm_log2_scaled[2]
-#define VM_L2A3 __vm_log2_scaled[3]
-#define VM_L2A4 __vm_log2_scaled[4]
-#define VM_L2B0 __vm_log2_scaled[5]
-#define VM_L2B1 __vm_log2_scaled[6]
-#define VM_L2B2 __vm_log2_scaled[7]
-#define VM_L2B3 __vm_log2_scaled[8]
-#define VM_L2B4 __vm_log2_scaled[9]
-#define VM_L2B5 __vm_log2_scaled[10]
-#define VM_L2B6 __vm_log2_scaled[11]
-#define VM_L2B7 __vm_log2_scaled[12]
-#define VM_L2B8 __vm_log2_scaled[13]
-#define VM_L2B9 __vm_log2_scaled[14]
-#define VM_L2B10 __vm_log2_scaled[15]
-#define VM_L2INV __vm_log2_scaled[16]
-#endif
+/* Table-driven log2 core: plain double, one exact FMA residual, no
+   division, no double-double combine.
 
-/* Lean plain-double log2 (Arm log.c reduction evaluated in log2 units).
-   The final composition is a dd pair so log2p1 can add its tail before
-   the one final rounding.  */
-#define VM_LOG2_PLAIN(yh, yl, mo, x, vl) do {				\
-  const struct vm_log_data *vlq_D__ = &__vecmath_log_data;		\
-  vm_f_t vlq_x__ = (x);							\
-  vm_u64_t vlq_ix__ = VM_BITS (vlq_x__);				\
-  vm_u64_t vlq_top__ = VM_VSRL_VX (vlq_ix__, 48, (vl));			\
-  vm_b_t vlq_msp__ = VM_VMSGEU_VX (VM_VSUB_VX (vlq_top__, 0x10, (vl)),	\
-				   0x7fe0, (vl));			\
-  vm_b_t vlq_mne__ = VM_VMSLTU_VX (VM_VSUB_VX (vlq_ix__, VM_LOG_LO, (vl)), \
-				   VM_LOG_HILO, (vl));			\
-  vm_f_t vlq_xs__ = VM_VFMERGE_VFM (vlq_x__, 1.0, vlq_msp__, (vl));	\
-  vm_f_t vlq_xn__ = VM_VFMERGE_VFM (vlq_x__, 1.0,			\
-				    VM_VMNOT_M (vlq_mne__, (vl)), (vl)); \
-  vm_f_t vlq_yh__, vlq_yl__;						\
-  {									\
-    /* ---- near-1 path, log2 units ---- */				\
-    vm_f_t r = VM_VFSUB_VF (vlq_xn__, 1.0, (vl));			\
-    vm_f_t r2 = VM_VFMUL_VV (r, r, (vl));				\
-    vm_f_t r3 = VM_VFMUL_VV (r, r2, (vl));				\
-    vm_f_t b = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2B7, (vl)),		\
-			     VM_L2B8, r, (vl));				\
-    b = VM_VFMACC_VF (b, VM_L2B9, r2, (vl));				\
-    b = VM_VFMACC_VF (b, VM_L2B10, r3, (vl));				\
-    vm_f_t a = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2B4, (vl)),		\
-			     VM_L2B5, r, (vl));				\
-    a = VM_VFMACC_VF (a, VM_L2B6, r2, (vl));				\
-    a = VM_VFMACC_VV (a, r3, b, (vl));					\
-    vm_f_t pp = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2B1, (vl)),		\
-			      VM_L2B2, r, (vl));			\
-    pp = VM_VFMACC_VF (pp, VM_L2B3, r2, (vl));				\
-    pp = VM_VFMACC_VV (pp, r3, a, (vl));				\
-    vm_f_t np = VM_VFMUL_VV (r3, pp, (vl));				\
-    vm_f_t w = VM_VFMUL_VF (r, 0x1p27, (vl));				\
-    vm_f_t rhi = VM_VFSUB_VV (VM_VFADD_VV (r, w, (vl)), w, (vl));	\
-    vm_f_t rlo = VM_VFSUB_VV (r, rhi, (vl));				\
-    /* t = r/ln2 correctly rounded, te its exact residual */		\
-    vm_f_t tp = VM_VFMUL_VF (r, VM_INVLN2_LO, (vl));			\
-    vm_f_t t = VM_VFMACC_VF (tp, VM_INVLN2_HI, r, (vl));		\
-    vm_f_t te = VM_VFMACC_VF (VM_VFMACC_VF (VM_VFNEG_V (t, (vl)),	\
-					   VM_INVLN2_HI, r, (vl)),	\
-			      VM_INVLN2_LO, r, (vl));			\
-    vm_f_t w2 = VM_VFMUL_VF (VM_VFMUL_VV (rhi, rhi, (vl)), VM_L2B0, (vl)); \
-    vm_f_t hi = VM_VFADD_VV (t, w2, (vl));				\
-    vm_f_t lo = VM_VFADD_VV (VM_VFSUB_VV (t, hi, (vl)), w2, (vl));	\
-    lo = VM_VFADD_VV (lo, VM_VFMUL_VF (VM_VFMUL_VV (			\
-      rlo, VM_VFADD_VV (rhi, r, (vl)), (vl)), VM_L2B0, (vl)), (vl));	\
-    lo = VM_VFADD_VV (lo, te, (vl));					\
-    {									\
-      vm_f_t s1 = VM_VFADD_VV (np, lo, (vl));				\
-      vm_f_t s1e = VM_VFSUB_VV (VM_VFSUB_VV (s1, np, (vl)), lo, (vl));	\
-      vm_f_t y1 = VM_VFADD_VV (s1, hi, (vl));				\
-      vm_f_t y1e = VM_VFADD_VV (VM_VFADD_VV (VM_VFSUB_VV (s1, y1, (vl)), \
-					     hi, (vl)), s1e, (vl))	\
-	;								\
-      vm_f_t vlynh__ = y1;						\
-      vm_f_t vlyl__ = y1e;						\
-      /* ---- main path, log2 units ---- */				\
-      vm_u64_t ixb = VM_BITS (vlq_xs__);				\
-      vm_u64_t tmp = VM_VSUB_VX (ixb, VM_LOG_OFF, (vl));		\
-      vm_u64_t off = VM_VSLL_VX (VM_VAND_VX (				\
-	VM_VSRL_VX (tmp, 45, (vl)), 127, (vl)), 4, (vl));		\
-      vm_f_t invc = VM_VLUXEI64 (&vlq_D__->tab[0].invc, off, (vl));	\
-      vm_f_t logc = VM_VLUXEI64 (&vlq_D__->tab[0].logc, off, (vl));	\
-      vm_i64_t k = VM_VSRA_VX (VM_REINT_U_I (tmp), 52, (vl));		\
-      vm_u64_t iz = VM_VSUB_VV (ixb,					\
-	VM_VAND_VX (tmp, 0xfff0000000000000ULL, (vl)), (vl));		\
-      vm_f_t z = VM_FROM_BITS (iz);					\
-      vm_f_t kd = VM_VFCVT_F_X_V (k, (vl));				\
-      vm_f_t log2c = VM_VFMACC_VF (VM_VFMUL_VF (logc,			\
-	VM_INVLN2_LO, (vl)), VM_INVLN2_HI, logc, (vl));			\
-      r = VM_VFMACC_VV (VM_VFMV_V_F (-1.0, (vl)), invc, z, (vl));	\
-      vm_f_t u1 = VM_VFMUL_VF (r, VM_INVLN2_LO, (vl));			\
-      vm_f_t t1 = VM_VFMACC_VF (u1, VM_INVLN2_HI, r, (vl));		\
-      vm_f_t t1e = VM_VFMACC_VF (VM_VFMACC_VF (VM_VFNEG_V (t1, (vl)),	\
-					       VM_INVLN2_HI, r, (vl)),	\
-				  VM_INVLN2_LO, r, (vl));		\
-      w2 = VM_VFADD_VV (kd, log2c, (vl));				\
-      hi = VM_VFADD_VV (w2, t1, (vl));					\
-      lo = VM_VFADD_VV (VM_VFADD_VV (VM_VFSUB_VV (w2, hi, (vl)), t1, (vl)), \
-			t1e, (vl));					\
-      r2 = VM_VFMUL_VV (r, r, (vl));					\
-      {									\
-	vm_f_t q0 = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2A3, (vl)),		\
-				  VM_L2A4, r, (vl));			\
-	vm_f_t q1 = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2A1, (vl)),		\
-				  VM_L2A2, r, (vl));			\
-	q1 = VM_VFADD_VV (q1, VM_VFMUL_VV (r2, q0, (vl)), (vl));	\
-	vm_f_t pr = VM_VFADD_VV (VM_VFMUL_VF (r2, VM_L2A0, (vl)),	\
-	  VM_VFMUL_VV (VM_VFMUL_VV (r, r2, (vl)), q1, (vl)), (vl));	\
-	vm_f_t ta, tae;						\
-	VM_TWO_SUM (ta, tae, lo, pr, (vl));				\
-	vm_f_t ym = VM_VFADD_VV (ta, hi, (vl));			\
-	vm_f_t ye = VM_VFADD_VV (					\
-	  VM_VFADD_VV (VM_VFSUB_VV (ta, ym, (vl)), hi, (vl)), tae, (vl)); \
-	vlq_yh__ = VM_VFMERGE_VVM (ym, vlynh__, vlq_mne__, (vl));	\
-	vlq_yl__ = VM_VFMERGE_VVM (ye, vlyl__, vlq_mne__, (vl));	\
-      }									\
-    }									\
-  }									\
-  (yh) = vlq_yh__;							\
-  (yl) = vlq_yl__;							\
-  (mo) = vlq_msp__;							\
+   x = 2^k * m with m in [1,2).  The top 9 mantissa bits select a table
+   entry {r, l1, l2}: r is a <= 10-bit approximation of 1/m over that
+   slice and l1 + l2 = log2(1/r) split so that l1 is a multiple of
+   2^-40 (the pair carries ~93 bits).  Then
+
+     z = fma (r, m, -1)          EXACT: r has <= 10 significant bits,
+                                 so r*m - 1 is a multiple of 2^-62 of
+                                 magnitude <= 2^-8, i.e. <= 53 bits
+     log2(x) = (k + l1) + p      p = log2(1+z) to ~0.55 ulp
+
+   so one fma plus a degree-7 polynomial in z does the whole reduction:
+
+     p = w*C1 + w^2*Q(w)         (C1 = 1/ln2)
+
+   with Q of degree 5 in w (Estrin), and l2 folded into the w^2 term.
+   The coarse part k + l1 is EXACT for every exponent (l1 is a multiple
+   of 2^-40, |k| <= 1024), so only the final rounding is left.  Table
+   entries 0/1 use r = 1 and 509..511 use r = 1/2, both exact powers of
+   two: z = m-1 / z = m/2-1 is then exact by Sterbenz and l1 = 0 / 1
+   exactly, so x near 1 (and just below a power of two) carries the
+   whole answer in p with full relative precision instead of cancelling
+   against a coarse table value.
+
+   Yields the pair hi = k + l1 (exact coarse part), lo = p; the caller
+   rounds hi + lo once (log2) or folds one more term into l2 first
+   (log2p1, next).  */
+
+/* log2p1's c/u tail, in log2 units, folded into the polynomial's
+   constant term (l2) so that the answer still gets exactly one rounding
+   -- adding it after the core would re-round a value of the answer's own
+   size whenever x is tiny.  cu = c/(u*ln2) with 1/u = 2^-j * r * (1-z),
+   where u = 2^j*m, r is the core's table reciprocal and z = r*m-1 its
+   exact residual.  r*(1-z) is 1/m to z^2 ~ 2^-16 relative, and r itself
+   is exact for the r = 1 / r = 1/2 table entries and within 2^-10
+   elsewhere -- far inside the ~|x| relative accuracy the tail needs: the
+   tail is at most 2^-52.5 absolute, so it only matters when |x| is
+   small, and there u ~ 1 and r*(1-z) = 1/(1+z) to z^2.  */
+static inline vm_f_t
+VM_KFN (log2p1_tail) (vm_f_t c, vm_f_t r, vm_f_t z, vm_u64_t ub, size_t vl)
+{
+  vm_u64_t vlt_i2e = VM_VSUB_VV (VM_VMV_V_X (0x7fe0000000000000ULL, (vl)),	\
+    VM_VAND_VX (ub, 0x7ff0000000000000ULL, (vl)), (vl));
+  vm_f_t vlt_t = VM_VFMUL_VV (c, VM_FROM_BITS (vlt_i2e), (vl));
+  vlt_t = VM_VFMUL_VV (vlt_t, r, (vl));
+  vlt_t = VM_VFMUL_VV (vlt_t, VM_VFRSUB_VF (z, 1.0, (vl)), (vl));
+  /* 1/ln2 to a single double: its 0.064 ulp bias only shows up on
+     near-tie lanes, and correcting it with the lo part would underflow
+     (and raise a spurious flag) whenever the tail itself is subnormal.  */
+  return VM_VFMUL_VF (vlt_t, VM_L2T_C1, (vl));
+}
+
+#define VM_L2T_L2_PLAIN							\
+  VM_VLUXEI64 (&__vm_log2_tab[0].l2, vl2t_off, (vl))
+#define VM_L2T_L2_TAIL(c, r, z, ub)					\
+  VM_VFADD_VV (VM_L2T_L2_PLAIN,						\
+	       VM_KFN (log2p1_tail) ((c), (r), (z), (ub), (vl)), (vl))
+
+#define VM_L2T_CORE(yh, yl, x, L2EXPR, vl) do {				\
+  vm_u64_t vl2t_b = VM_BITS (x);					\
+  vm_u64_t vl2t_off = VM_VAND_VX (VM_VSRL_VX (vl2t_b, 38, (vl)),	\
+				  0x3fe0, (vl));			\
+  vm_f_t vl2t_m = VM_FROM_BITS (VM_VOR_VX (				\
+    VM_VAND_VX (vl2t_b, 0x000fffffffffffffULL, (vl)),			\
+    0x3ff0000000000000ULL, (vl)));					\
+  vm_i64_t vl2t_k = VM_REINT_U_I (VM_VSUB_VX (				\
+    VM_VSRL_VX (vl2t_b, 52, (vl)), 1023, (vl)));			\
+  vm_f_t vl2t_r = VM_VLUXEI64 (&__vm_log2_tab[0].r, vl2t_off, (vl));	\
+  vm_f_t vl2t_l1 = VM_VLUXEI64 (&__vm_log2_tab[0].l1, vl2t_off, (vl));	\
+  vm_f_t vl2t_w = VM_VFMACC_VV (VM_VFMV_V_F (-1.0, (vl)),		\
+				vl2t_r, vl2t_m, (vl));			\
+  vm_f_t vl2t_l2 = (L2EXPR);						\
+  vm_f_t vl2t_w2 = VM_VFMUL_VV (vl2t_w, vl2t_w, (vl));			\
+  vm_f_t vl2t_a0 = VM_VFMACC_VF (					\
+    VM_VFMV_V_F (__vm_log2_tab_poly[0], (vl)),				\
+    __vm_log2_tab_poly[1], vl2t_w, (vl));				\
+  vm_f_t vl2t_a1 = VM_VFMACC_VF (					\
+    VM_VFMV_V_F (__vm_log2_tab_poly[2], (vl)),				\
+    __vm_log2_tab_poly[3], vl2t_w, (vl));				\
+  vm_f_t vl2t_a2 = VM_VFMACC_VF (					\
+    VM_VFMV_V_F (__vm_log2_tab_poly[4], (vl)),				\
+    __vm_log2_tab_poly[5], vl2t_w, (vl));				\
+  vl2t_a0 = VM_VFMACC_VV (vl2t_a0, vl2t_w2, vl2t_a1, (vl));		\
+  vl2t_a2 = VM_VFMACC_VV (vl2t_a0, VM_VFMUL_VV (vl2t_w2, vl2t_w2, (vl)), \
+			  vl2t_a2, (vl));				\
+  vl2t_a2 = VM_VFMACC_VV (vl2t_l2, vl2t_w2, vl2t_a2, (vl));		\
+  (yl) = VM_VFMACC_VF (vl2t_a2, VM_L2T_C1, vl2t_w, (vl));		\
+  (yh) = VM_VFADD_VV (VM_VFCVT_F_X_V (vl2t_k, (vl)), vl2t_l1, (vl));	\
 } while (0)
 
-#define VM_L2_LP1 0x1.ec709dc3a0457p-1
-#define VM_L2_LP2 0x1.2776c50ee7037p-1
-#define VM_L2_LP3 0x1.a61762d25e3b9p-2
-#define VM_L2_LP4 0x1.484afccf4e947p-2
-#define VM_L2_LP5 0x1.0ca126c29e1efp-2
-#define VM_L2_LP6 0x1.c477fc00c758bp-3
-#define VM_L2_LP7 0x1.b53bc0f37a0cap-3
-
-/* fdlibm s_log1p reduction evaluated in log2 units: log2(x) as a dd
-   pair for a finite x > 0 (special lanes sanitized).  */
-#define VM_LOG2_FD_CORE(yh, yl, x, vl) do {				\
-  vm_f_t vmk_x = (x);							\
-  vm_u64_t vmk_ix = VM_BITS (vmk_x);					\
-  vm_u64_t vmk_top = VM_VSRL_VX (vmk_ix, 48, (vl));			\
-  vm_b_t vmk_msp = VM_VMSGEU_VX (VM_VSUB_VX (vmk_top, 0x10, (vl)),	\
-				   0x7fe0, (vl));			\
-  /* Plain-double log2 via fdlibm's log1p reduction evaluated in log2 \
-     units: x = 2^k*(1+f), log2(x) = k + log2(1+f), the second term from \
-     the s = f/(2+f) rational with all coefficients pre-divided by ln2. \
-     Subnormal/zero/negative/inf lanes go to scalar log2.  */ \
-  vm_u64_t ix = vmk_ix; \
-  vm_u64_t top16 = vmk_top; \
-  vm_b_t m_spec = vmk_msp; \
-  vm_f_t xs = VM_VFMERGE_VFM ((x), 1.5, vmk_msp, (vl)); \
-  vm_u64_t ub = VM_BITS (xs); \
-  vm_u64_t uh = VM_VSRL_VX (ub, 32, (vl)); \
-  vm_i64_t kraw = VM_REINT_U_I ( \
-    VM_VSUB_VX (VM_VSRL_VX (ub, 52, (vl)), 1023, (vl))); \
-  vm_u64_t hu = VM_VAND_VX (uh, 0x000fffff, (vl)); \
-  vm_b_t m_hus = VM_VMSLTU_VX (hu, 0x6a09e, (vl)); \
-  vm_u64_t unb = VM_VMERGE_VVM ( \
-    VM_VOR_VV (VM_VAND_VX (ub, 0xffffffffULL, (vl)), \
-	       VM_VSLL_VX (VM_VOR_VX (hu, 0x3fe00000, (vl)), 32, (vl)), (vl)), \
-    VM_VOR_VV (VM_VAND_VX (ub, 0xffffffffULL, (vl)), \
-	       VM_VSLL_VX (VM_VOR_VX (hu, 0x3ff00000, (vl)), 32, (vl)), (vl)), \
-    m_hus, (vl)); \
-  vm_i64_t ki = VM_REINT_U_I (VM_VMERGE_VVM ( \
-    VM_VADD_VX (VM_REINT_I_U (kraw), 1, (vl)), \
-    VM_REINT_I_U (kraw), m_hus, (vl))); \
-  vm_f_t f = VM_VFSUB_VF (VM_FROM_BITS (unb), 1.0, (vl)); \
-  vm_f_t ff = VM_VFMUL_VV (f, f, (vl)); \
-  vm_f_t hfsq2 = VM_VFMUL_VF (VM_VFMUL_VF (ff, 0.5, (vl)), \
-			      VM_INVLN2_HI, (vl)); \
-  vm_f_t s = VM_VFDIV_VV (f, VM_VFADD_VF (f, 2.0, (vl)), (vl)); \
-  vm_f_t z = VM_VFMUL_VV (s, s, (vl)); \
-  vm_f_t R2 = VM_VFMACC_VF (VM_VFMV_V_F (VM_L2_LP6, (vl)), VM_L2_LP7, z, (vl)); \
-  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP5, (vl)), z, R2, (vl)); \
-  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP4, (vl)), z, R2, (vl)); \
-  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP3, (vl)), z, R2, (vl)); \
-  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP2, (vl)), z, R2, (vl)); \
-  R2 = VM_VFMACC_VV (VM_VFMV_V_F (VM_L2_LP1, (vl)), z, R2, (vl)); \
-  R2 = VM_VFMUL_VV (z, R2, (vl)); \
-  vm_f_t X2 = VM_VFMUL_VV (s, VM_VFADD_VV (hfsq2, R2, (vl)), (vl)); \
-  /* f/ln2 correctly rounded (f2) with its exact residual te */ \
-  vm_b_t m_fl = VM_VMSGEU_VX ( \
-    VM_VAND_VX (VM_BITS (f), VM_ABSMASK_U64, (vl)), \
-    0x07b0000000000000ULL, (vl)); \
-  vm_f_t f2 = VM_VFMUL_VF (f, VM_INVLN2_HI, (vl)); \
-  f2 = VM_VFMACC_VF_M (m_fl, f2, VM_INVLN2_LO, f, (vl)); \
-  vm_f_t te = VM_VFMACC_VF_M (m_fl, VM_VFNEG_V (f2, (vl)), \
-			      VM_INVLN2_HI, f, (vl)); \
-  te = VM_VFMACC_VF_M (m_fl, te, VM_INVLN2_LO, f, (vl)); \
-  vm_f_t kd = VM_VFCVT_F_X_V (ki, (vl)); \
-  vm_f_t inner = VM_VFSUB_VV (hfsq2, X2, (vl)); \
-  /* k + log2(1+f) = k + f/ln2 - inner, tracked: \
-     u1 = inner - te; u2 = u1 - f2; y = kd - u2.  */ \
-  vm_f_t u1, u1e, u2, u2e, yB, yBe; \
-  VM_TWO_SUM (u1, u1e, inner, VM_VFNEG_V (te, (vl)), (vl)); \
-  VM_TWO_SUM (u2, u2e, u1, VM_VFNEG_V (f2, (vl)), (vl)); \
-  VM_TWO_SUM (yB, yBe, kd, VM_VFNEG_V (u2, (vl)), (vl)); \
-  yBe = VM_VFSUB_VV (VM_VFSUB_VV (yBe, u2e, (vl)), u1e, (vl)); \
-  (yh) = yB; \
-  (yl) = yBe; \
-} while (0)
+#define VM_LOG2_TAB_CORE(yh, yl, x, vl)					\
+  VM_L2T_CORE (yh, yl, x, VM_L2T_L2_PLAIN, vl)
 
 static inline vm_f_t
 VM_KFN (log2_k) (vm_f_t x, size_t vl, double (*fixup) (double))
 {
   vm_f_t yh, yl;
-  vm_u64_t ix = VM_BITS (x);
-  vm_u64_t top16 = VM_VSRL_VX (ix, 48, (vl));
-  vm_b_t m_spec = VM_VMSGEU_VX (VM_VSUB_VX (top16, 0x10, (vl)), 0x7fe0, (vl));
-  VM_LOG2_FD_CORE (yh, yl, x, vl);
-  return VM_FIXUP1 (x, VM_VFADD_VV (yh, yl, (vl)), m_spec, vl,
-				fixup);
+  vm_u64_t top16 = VM_VSRL_VX (VM_BITS (x), 48, (vl));
+  vm_b_t mspec = VM_VMSGEU_VX (VM_VSUB_VX (top16, 0x10, (vl)), 0x7fe0, (vl));
+  VM_LOG2_TAB_CORE (yh, yl, x, vl);
+  return VM_FIXUP1 (x, VM_VFADD_VV (yh, yl, (vl)), mspec, vl, fixup);
 }
-
 
 /* ------------------------------------------------------------------ */
 /* log1p(x) -- vectorization of fdlibm common/s_log1p.c.  All branches
@@ -901,12 +779,11 @@ VM_KFN (log10) (vm_f_t x, size_t vl, double (*fixup) (double))
 }
 
 /* ------------------------------------------------------------------ */
-/* log2p1(x) = log2(1+x): the fdlibm log2 core runs on the rounded
-   u = 1+x and the exact rounding residual c = x-(u-1) adds the tail
-   c*ln2(e)/u (1/u from the linear mantissa estimate, max 12.5% on [1,2)
-   -- the tail is at most 2^-24 of the answer once |x| >= 2^-29, so that
-   is four orders below an ulp).  The core's dd pair is kept, so the
-   final add is one correctly rounded rounding.
+/* log2p1(x) = log2(1+x) = log2(u) + log2(1+c/u), with u = RN(1+x) and
+   c = x-(u-1) its exact rounding residual: the table core runs on u and
+   the c/(u*ln2) tail is folded into the core's l2 term (see
+   log2p1_tail), so the answer is one rounded sum -- important when x is
+   tiny, where the tail *is* the answer.
    fixup must be scalar log1p() -- it agrees with log2p1 on every special
    lane (-inf at -1, NaN below it, +inf at +inf).  */
 /* Rare-lane rescue for log2p1, deliberately out of line: the generic
@@ -936,12 +813,11 @@ static inline vm_f_t
 VM_KFN (log2p1) (vm_f_t x, size_t vl, double (*fixup) (double))
 {
   /* log2(1+x) = log2(u) + c/(u*ln2), u = RN(1+x), c = x-(u-1) exact.
-     The log2 core works in log2 units already, so the only correction is
-     the c/u tail folded by 1/ln2; it lands in the core's dd low part and
-     the sum rounds once.  The tail is at most 2^-24 of the answer for
-     |x| >= 2^-29, and below that u is within an ulp of 1 where the
-     linear-mantissa 1/u estimate is exact, so its 12.5% worst case is
-     orders of magnitude below an ulp.  */
+     The core works in log2 units, so the only correction is the c/u tail
+     in log2 units; it is folded into the core's l2 term and the sum
+     rounds once.  The tail is at most 2^-24 of the answer for
+     |x| >= 2^-29 and needs only ~|x| relative accuracy, which the
+     table's r*(1-z) gives (see log2p1_tail).  */
   vm_b_t m_spec;
   VM_LOG1P_SPEC_M (x, vl, m_spec);
   vm_f_t xs = VM_VFMERGE_VFM (x, 0.5, m_spec, vl);
@@ -951,26 +827,10 @@ VM_KFN (log2p1) (vm_f_t x, size_t vl, double (*fixup) (double))
   vm_f_t u = VM_VFADD_VF (xs, 1.0, (vl));
   vm_f_t c = VM_VFSUB_VV (xs, VM_VFSUB_VF (u, 1.0, (vl)), (vl));
 
-  /* The c/u tail first, so only one live group crosses the log2 core and
-     the register allocator does not spill the contraction.  */
-  vm_f_t cu;
-  {
-    vm_u64_t ub = VM_BITS (u);
-    vm_f_t mant = VM_FROM_BITS (VM_VOR_VX (
-      VM_VAND_VX (ub, 0x000fffffffffffffULL, (vl)),
-      0x3ff0000000000000ULL, (vl)));
-    vm_u64_t i2e = VM_VSLL_VX (
-      VM_VSUB_VV (VM_VMV_V_X (2046, (vl)),
-		  VM_VSRL_VX (ub, 52, (vl)), (vl)), 52, (vl));
-    vm_f_t lin = VM_VFNMSAC_VF (VM_VFMV_V_F (1.5, (vl)), 0.5, mant, (vl));
-    cu = VM_VFMUL_VF (
-      VM_VFMUL_VV (c, VM_VFMUL_VV (lin, VM_FROM_BITS (i2e), (vl)), (vl)),
-      VM_INVLN2_HI, (vl));
-  }
   vm_f_t yh, yl;
-  VM_LOG2_FD_CORE (yh, yl, u, vl);
+  VM_L2T_CORE (yh, yl, u, VM_L2T_L2_TAIL (c, vl2t_r, vl2t_w, vl2t_b), vl);
   {
-    vm_f_t y = VM_VFADD_VV (yh, VM_VFADD_VV (yl, cu, (vl)), (vl));
+    vm_f_t y = VM_VFADD_VV (yh, yl, (vl));
     /* A nonzero subnormal answer is always inexact (log2(1+x) is
        irrational for rational x != 0) and must raise UNDERFLOW; the
        product above can land exactly on the subnormal grid, so raise it
