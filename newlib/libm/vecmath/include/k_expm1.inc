@@ -3,12 +3,31 @@
    LMUL-generic template: include after vecmath_rvvcompat.h and
    vecmath_local.h (k_fixup.inc) with VM_LMUL defined.
 
-   Vectorized fdlibm common/s_expm1.c: reduction x = k*ln2 + (xr + c)
-   with the exact k*ln2_hi split, the scaled-Q polynomial for expm1(xr),
-   and the source's (i)..(vii) branch matrix as masked selects.  Exponent
-   scaling is SET_HIGH_WORD(y, high + (k << 20)), i.e. bits(y)+(k << 52).
-   Special lanes (|x| >= 56 ln2, inf/NaN) are computed inline with their
-   exact scalar flag behavior.  */
+   One reduction, one polynomial, one reconstruction.  Every lane with
+   |x| >= 2^-54 is reduced with k = rint(x/ln2) and the exact two-word
+   split hi = x - k*ln2_hi, lo = k*ln2_lo, xr = hi - lo, c = (hi-xr)-lo;
+   fdlibm's rational gives e ~= (expm1(xr) - xr - xr^2/2)/xr, and the
+   result is rebuilt with a single fused multiply-add
+
+       y = fma (2^k, u, 2^k - 1),   u = xr - (xr*(e-c) - c - hxs).
+
+   For k == 0 that is fdlibm's k == 0 formula exactly (2^0 = 1 and
+   2^0 - 1 = 0 leave the FMA returning u = xr - (xr*e - hxs)), so no
+   per-k case split survives: 2^k is one integer shift and 2^k - 1 one
+   subtraction, and the single FMA rounds the whole reconstruction once,
+   where fdlibm's 1-2^-k / 2^-k / 1-(e-x) sub-cases each needed their own
+   trick to keep the trailing "-1" exact.
+
+   Special lanes are one clamp plus two merges.  x <= -56 ln2 (and -inf)
+   clamps to -56 ln2: k = -56 and |2^k*u| <= 2^-56*1.5 < ulp(1)/2, so the
+   FMA returns exactly -1 as the scalar does.  x >= 709.78 (and +inf)
+   clamps to 710: k = 1024, so the FMA overflows to +inf with
+   OVERFLOW|INEXACT, which is the scalar's huge*huge.  k == 1024 is the
+   one k whose 2^k is not representable, so the reconstruction clamps k
+   to 1023 there and feeds 2u+1 instead of u (2^1024*(1+u) =
+   2^1023*(2+2u)); +inf and NaN stay out of the reduction entirely and
+   are merged back as x+x, so a NaN keeps its payload and -inf still
+   takes the -1 path above.  */
 
 /* VM_EXPM1_DD expands VM_EXP_DD, so it also needs k_exp.inc at the same
    VM_LMUL (as k_hyper.inc does).  vecmath_dd.h is included for
@@ -26,155 +45,104 @@
 #define VM_Q4_E1	 4.00821782732936239552e-06
 #define VM_Q5_E1	-2.01099218183624371326e-07
 
+/* 0x4043687A00000000: fdlibm's |x| >= 56*ln2 boundary, i.e. the first
+   input for which expm1(x) rounds to exactly -1.  */
+#define VM_N56LN2_E1	(-3.88162231445312500000e+01)
+/* Clamp target for the overflow side: any x >= o_threshold maps here and
+   the reconstruction's FMA then overflows to +inf.  */
+#define VM_PBIG_E1	7.10e+02
+
+/* One-off wrappers not carried by the shared compat layer.  */
+#define VM_E1_VMIN_VX(a, s, vl) VM_I64FN (vmin_vx_) (a, s, vl)
+
 static inline vm_f_t
 VM_KFN (expm1) (vm_f_t x, size_t vl)
 {
   vm_i64_t hx = VM_VSRA_VX (VM_REINT_U_I (VM_BITS (x)), 32, vl);
-  vm_u64_t ahx = VM_REINT_I_U (hx);
-  ahx = VM_VAND_VX (ahx, 0x7fffffff, vl);
-  vm_b_t m_neg = VM_VMSLT_VX (hx, 0, vl);
-  vm_b_t m_tiny = VM_VMSLTU_VX (ahx, 0x3c900000, vl);
-  /* fdlibm: `ix < 0x3fd62e43` for the |x| < ln2/2 branch and
-     `ix < 0x3ff0a2b2` for the next.  */
-  vm_b_t m_small = VM_VMSLTU_VX (VM_VSUB_VX (ahx, 0x3c900000, vl),
-				 0x3fd62e43 - 0x3c900000, vl);
-  vm_b_t m_mid = VM_VMSLTU_VX (VM_VSUB_VX (ahx, 0x3fd62e43, vl),
-			       0x3ff0a2b2 - 0x3fd62e43, vl);
-  vm_b_t m_bigred = VM_VMSLTU_VX (VM_VSUB_VX (ahx, 0x3ff0a2b2, vl),
-				  0x4043687a - 0x3ff0a2b2, vl);
-  vm_b_t m_vbig = VM_VMSGEU_VX (ahx, 0x4043687a, vl);
+  vm_u64_t ahx = VM_VAND_VX (VM_REINT_I_U (hx), 0x7fffffff, vl);
+  /* Reduction set: 2^-54 <= |x| < +inf, i.e. the finite lanes that are
+     not tiny, plus -inf (which clamps to -56 ln2 and lands on -1 like
+     every other x <= -56 ln2).  +inf, NaN and the tiny lanes stay out and
+     are merged back at the end.  Both tests are integer: an FP compare
+     raises INVALID on a quiet NaN on some implementations, and the high
+     word alone cannot tell -inf from a NaN whose payload lives in the low
+     word.  */
+  vm_b_t m_range = VM_VMSLTU_VX (VM_VSUB_VX (ahx, 0x3c900000, vl),
+				 0x7ff00000 - 0x3c900000, vl);
+  vm_b_t m_neginf = VM_VMSEQ_VX (VM_BITS (x), 0xfff0000000000000ULL, vl);
+  vm_b_t m_red = VM_VMOR_MM (m_range, m_neginf, vl);
+  vm_b_t m_excl = VM_VMNOT_M (m_red, vl);
   vm_b_t m_infnan = VM_VMSGEU_VX (ahx, 0x7ff00000, vl);
-  /* |x| < 2^-54: x - (t - (huge + x)) == x, with scalar's inexact.  */
-  vm_f_t huge = VM_VFMV_V_F (1.0e+300, vl);
-  /* masked: only tiny lanes may raise the inexact of scalar's huge+x.  */
-  vm_f_t u = VM_VFADD_VV_M (m_tiny, x, huge, vl);
-  vm_f_t y_tiny = VM_VFSUB_VV_M (m_tiny, x, VM_VFSUB_VV (u, u, vl), vl);
+  /* Clamped, sanitized reduction input: |k| <= 56 for the -1 region and
+     k = 1024 for the overflow region, so the exponent construction below
+     can never leave [-1023, 1024].  */
+  vm_f_t xc = VM_VFMAX_VF (x, VM_N56LN2_E1, vl);
+  xc = VM_VFMIN_VF (xc, VM_PBIG_E1, vl);
+  vm_f_t xred = VM_VFMERGE_VFM (xc, 1.0, m_excl, vl);
 
-  /* |x| >= 56*ln2 block (scalar order): -inf -> -1; NaN -> x+x; finite
-     positive above o_threshold -> overflow; other big lanes fall through
-     to the reduction.  */
-  vm_b_t m_bigfin = VM_VMAND_MM (m_vbig, VM_VMNOT_M (m_infnan, vl), vl);
-  vm_b_t m_negbig = VM_VMAND_MM (m_bigfin, m_neg, vl);
-  vm_b_t m_oflow = VM_VMAND_MM (
-    m_bigfin, VM_VMNOT_M (m_neg, vl), vl);
-  m_oflow = VM_VMAND_MM (m_oflow,
-			 VM_VMFGT_VF (VM_VFMERGE_VFM (x, 0.0, m_infnan, vl),
-				      VM_O_THRESH_E1, vl), vl);
+  /* ---- argument reduction ---- */
+  vm_f_t kf = VM_VFMUL_VF (xred, VM_INVLN2_E1, vl);
+  vm_i64_t k = VM_VFCVT_X_F_V (kf, vl);		/* rint (round to nearest) */
+  vm_f_t kd = VM_VFCVT_F_X_V (k, vl);
+  vm_f_t hi = VM_VFNMSAC_VF (xred, VM_LN2_HI_E1, kd, vl); /* x-kd*ln2hi */
+  vm_f_t lo = VM_VFMUL_VF (kd, VM_LN2_LO_E1, vl);
+  vm_f_t xr = VM_VFSUB_VV (hi, lo, vl);
+  vm_f_t c = VM_VFSUB_VV (VM_VFSUB_VV (hi, xr, vl), lo, vl);
 
-  /* ---- reduction for the k != 0 red lanes ----
-     The reduction set is the mid and general-k regions plus the finite
-     non-negative |x| >= 56*ln2 fall-through.  Everything else (inf/NaN,
-     overflow, negative big lanes -> -1) must stay out: their kf would
-     overflow the int64 conversion and raise INVALID.  */
-  vm_b_t m_red = VM_VMOR_MM (m_mid, m_bigred, vl);
-  m_red = VM_VMOR_MM (m_red,
-		      VM_VMAND_MM (VM_VMAND_MM (m_bigfin,
-						VM_VMNOT_M (m_oflow, vl), vl),
-				   VM_VMNOT_M (m_neg, vl), vl), vl);
-  /* sanitized reduction input (0.1 = harmless filler).  */
-  vm_f_t xred = VM_VFMERGE_VFM (x, 0.1, VM_VMNOT_M (m_red, vl), vl);
-  vm_f_t hi_m = VM_VFMERGE_VVM (VM_VFSUB_VF (xred, VM_LN2_HI_E1, vl),
-				VM_VFADD_VF (xred, VM_LN2_HI_E1, vl),
-				m_neg, vl);
-  vm_f_t lo_m = VM_VFMERGE_VFM (VM_VFMV_V_F (VM_LN2_LO_E1, vl),
-				-VM_LN2_LO_E1, m_neg, vl);
-  vm_i64_t k_m = VM_REINT_U_I (
-    VM_VMERGE_VXM (VM_VMV_V_X (1, vl), -1, m_neg, vl));
-  vm_f_t half = VM_VFMERGE_VFM (VM_VFMV_V_F (0.5, vl), -0.5, m_neg, vl);
-  vm_f_t kf = VM_VFMACC_VF (half, VM_INVLN2_E1, xred, vl); /* ±0.5+x*invln2 */
-  vm_i64_t k_g = VM_VFCVT_RTZ_X_F_V (kf, vl);		/* C truncation */
-  vm_f_t kd_g = VM_VFCVT_F_X_V (k_g, vl);
-  vm_f_t hi_g = VM_VFNMSAC_VF (xred, VM_LN2_HI_E1, kd_g, vl); /* x-kd*ln2hi */
-  vm_f_t lo_g = VM_VFMUL_VF (kd_g, VM_LN2_LO_E1, vl);
-  vm_f_t hi = VM_VFMERGE_VVM (hi_g, hi_m, m_mid, vl);
-  vm_f_t lo = VM_VFMERGE_VVM (lo_g, lo_m, m_mid, vl);
-  vm_i64_t k = VM_REINT_U_I (VM_VMERGE_VVM (
-    VM_REINT_I_U (k_g), VM_REINT_I_U (k_m), m_mid, vl));
-  /* k = 0 lanes (m_small): xr = x, c = 0.  Others: 0.1 (results masked). */
-  vm_f_t xr = VM_VFMERGE_VFM (x, 0.1, VM_VMNOT_M (VM_VMOR_MM (m_red, m_small, vl), vl), vl);
-  vm_f_t xr_red = VM_VFSUB_VV (hi, lo, vl);
-  vm_f_t c_red = VM_VFSUB_VV (VM_VFSUB_VV (hi, xr_red, vl), lo, vl);
-  xr = VM_VFMERGE_VVM (xr, xr_red, m_red, vl);
-  vm_f_t c = VM_VFMERGE_VFM (c_red, 0.0, VM_VMNOT_M (m_red, vl), vl);
-
-  /* ---- polynomial ---- */
+  /* ---- polynomial: e ~ (expm1(xr) - xr - xr^2/2)/xr ---- */
   vm_f_t hfx = VM_VFMUL_VF (xr, 0.5, vl);
   vm_f_t hxs = VM_VFMUL_VV (xr, hfx, vl);
-  vm_f_t p = VM_VFMV_V_F (VM_Q5_E1, vl);
-  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_Q4_E1, vl), hxs, p, vl);
-  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_Q3_E1, vl), hxs, p, vl);
-  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_Q2_E1, vl), hxs, p, vl);
-  p = VM_VFMACC_VV (VM_VFMV_V_F (VM_Q1_E1, vl), hxs, p, vl);
+  /* Estrin over hxs: one extra vfmul for z2 buys a 3-deep instead of
+     5-deep chain, which measured 5% faster on muse-pi (29.3 vs 30.9
+     ns/element) for 1.5% more instructions.  */
+  vm_f_t z2 = VM_VFMUL_VV (hxs, hxs, vl);
+  vm_f_t pa = VM_VFMACC_VV (VM_VFMV_V_F (VM_Q1_E1, vl), hxs,
+			    VM_VFMV_V_F (VM_Q2_E1, vl), vl);
+  vm_f_t pb = VM_VFMACC_VV (VM_VFMV_V_F (VM_Q3_E1, vl), hxs,
+			    VM_VFMV_V_F (VM_Q4_E1, vl), vl);
+  pb = VM_VFMACC_VV (pb, z2, VM_VFMV_V_F (VM_Q5_E1, vl), vl);
+  vm_f_t p = VM_VFMACC_VV (pa, z2, pb, vl);
   vm_f_t r1 = VM_VFMACC_VV (VM_VFMV_V_F (1.0, vl), hxs, p, vl);
   vm_f_t t3 = VM_VFNMSAC_VV (VM_VFMV_V_F (3.0, vl), r1, hfx, vl);
   vm_f_t e = VM_VFMUL_VV (hxs, VM_VFDIV_VV (VM_VFSUB_VV (r1, t3, vl),
 					    VM_VFNMSAC_VV (VM_VFMV_V_F (6.0, vl),
 							   xr, t3, vl), vl), vl);
-  /* k == 0: xr - (xr*e - hxs) */
-  vm_f_t y_k0 = VM_VFSUB_VV (xr, VM_VFMSAC_VV (hxs, xr, e, vl), vl);
 
-  /* ---- k != 0 assembly ---- */
-  vm_f_t e1 = VM_VFMACC_VV (VM_VFNEG_V (c, vl), xr, VM_VFSUB_VV (e, c, vl), vl);
-  vm_f_t e2 = VM_VFSUB_VV (e1, hxs, vl);
-  vm_f_t y_m1 = VM_VFMACC_VF (VM_VFMV_V_F (-0.5, vl), 0.5,
-			      VM_VFSUB_VV (xr, e2, vl), vl);	/* 0.5(xr-e2)-0.5 */
-  vm_b_t m_lt = VM_VMFLT_VF (xr, -0.25, vl);
-  vm_f_t y1a = VM_VFMUL_VF (VM_VFSUB_VV (e2, VM_VFADD_VF (xr, 0.5, vl), vl),
-			    -2.0, vl);
-  vm_f_t y1b = VM_VFMACC_VF (VM_VFMV_V_F (1.0, vl), 2.0,
-			     VM_VFSUB_VV (xr, e2, vl), vl);
-  vm_f_t y_p1 = VM_VFMERGE_VVM (y1b, y1a, m_lt, vl);
-  /* general: (1 - (e2 - xr)) scaled by 2^k, then -1. */
-  vm_f_t yg = VM_VFSUB_VV (VM_VFMV_V_F (1.0, vl), VM_VFSUB_VV (e2, xr, vl), vl);
-  vm_u64_t k52 = VM_VSLL_VX (VM_REINT_I_U (k), 52, vl);
-  yg = VM_VFSUB_VF (VM_FROM_BITS (VM_VADD_VV (VM_BITS (yg), k52, vl)), 1.0, vl);
-  /* k in [2,20): t = 1 - 2^-k (upper-word trick).  */
-  vm_u64_t s2 = VM_VSRL_VV (VM_VMV_V_X (0x200000, vl), VM_REINT_I_U (k), vl);
-  vm_f_t t20 = VM_FROM_BITS (VM_VSLL_VX (
-    VM_VSUB_VV (VM_VMV_V_X (0x3ff00000, vl), s2, vl), 32, vl));
-  vm_f_t y20 = VM_VFSUB_VV (t20, VM_VFSUB_VV (e2, xr, vl), vl);
-  y20 = VM_FROM_BITS (VM_VADD_VV (VM_BITS (y20), k52, vl));
-  /* k in [20,57]: t = 2^-k; y = xr - (e2 + t) + 1, scaled.  */
-  vm_f_t t57 = VM_FROM_BITS (VM_VSLL_VX (
-    VM_VSUB_VV (VM_VMV_V_X (0x3ff, vl), VM_REINT_I_U (k), vl), 52, vl));
-  vm_f_t y57 = VM_VFADD_VF (VM_VFSUB_VV (xr, VM_VFADD_VV (e2, t57, vl), vl),
-			    1.0, vl);
-  y57 = VM_FROM_BITS (VM_VADD_VV (VM_BITS (y57), k52, vl));
-  /* select by k: -1, +1, <=-2 || >56, [2,20), [20,57] */
-  vm_b_t m_km1 = VM_VMSEQ_VX (VM_REINT_I_U (k), -1, vl);
-  vm_b_t m_kp1 = VM_VMSEQ_VX (VM_REINT_I_U (k), 1, vl);
-  vm_b_t m_kgen = VM_VMOR_MM (VM_VMSLE_VX (k, -2, vl),
-			      VM_VMSGT_VX (k, 56, vl), vl);
-  vm_b_t m_k20 = VM_VMAND_MM (VM_VMSGE_VX (k, 2, vl),
-			      VM_VMSLT_VX (k, 20, vl), vl);
-  vm_b_t m_k57 = VM_VMAND_MM (VM_VMSGE_VX (k, 20, vl),
-			      VM_VMSLE_VX (k, 56, vl), vl);
-  vm_f_t yk = VM_VFMERGE_VVM (yg, y_m1, m_km1, vl);
-  yk = VM_VFMERGE_VVM (yk, y_p1, m_kp1, vl);
-  yk = VM_VFMERGE_VVM (yk, y20, m_k20, vl);
-  yk = VM_VFMERGE_VVM (yk, y57, m_k57, vl);
-  yk = VM_VFMERGE_VVM (yk, yg, m_kgen, vl);
-
-  /* ---- assemble regions ---- */
-  vm_f_t y = VM_VFMERGE_VVM (yk, y_k0, m_small, vl);
-  y = VM_VFMERGE_VVM (y, y_tiny, m_tiny, vl);
+  /* ---- reconstruction ---- */
+  vm_f_t ec = VM_VFSUB_VV (e, c, vl);
+  vm_f_t e2 = VM_VFMSAC_VV (c, xr, ec, vl);	/* xr*(e-c) - c */
+  e2 = VM_VFSUB_VV (e2, hxs, vl);
+  vm_f_t u = VM_VFSUB_VV (xr, e2, vl);
+  /* k == 1024 has no representable 2^k: clamp the exponent to 1023 and
+     feed 2u+1 (2^1024*(1+u) == 2^1023*(2+2u)); for k <= 1023 the merge
+     keeps u untouched.  */
+  vm_i64_t kk = VM_E1_VMIN_VX (k, 1023, vl);
+  vm_u64_t abits = VM_VADD_VX (VM_VSLL_VX (VM_REINT_I_U (kk), 52, vl),
+			       0x3ffULL << 52, vl);
+  vm_f_t a = VM_FROM_BITS (abits);
+  vm_f_t b = VM_VFSUB_VF (a, 1.0, vl);
+  vm_b_t m_k24 = VM_VMSGT_VX (k, 1023, vl);
+  vm_f_t u2 = VM_VFMACC_VF (VM_VFMV_V_F (1.0, vl), 2.0, u, vl);
+  vm_f_t uu = VM_VFMERGE_VVM (u, u2, m_k24, vl);
+  vm_f_t y = VM_VFMACC_VV (b, a, uu, vl);
+  /* k == 1 with xr < -0.25 is the one sub-region where the plain
+     reconstruction is a full ulp loose: there |u| crosses 0.25, so u's
+     own rounding (ulp 2^-54) is amplified by 2^1 into a whole ulp of the
+     result.  fdlibm's 0.5-shifted form computes xr + 0.5 - e2 at half
+     the final scale, which buys the bit back.  */
   {
-    /* negative finite big: -1 with scalar's inexact (tiny - 1).  */
-    vm_f_t yneg1 = VM_VFADD_VF (VM_VFMV_V_F (1.0e-300, vl), -1.0, vl);
-    y = VM_VFMERGE_VVM (y, yneg1, m_negbig, vl);
-    /* overflow: masked big*big raises OVERFLOW+INEXACT on those lanes
-       only, and feeds the result so it stays live.  */
-    vm_f_t yov = VM_VFMUL_VF_M (m_oflow, VM_VFMV_V_F (0x1p1000, vl),
-				0x1p1000, vl);
-    y = VM_VFMERGE_VVM (y, yov, m_oflow, vl);
-    /* inf/NaN: +inf -> x; -inf -> -1 exactly; NaN -> x + x.  */
-    vm_f_t xpx = VM_VFADD_VV_M (m_infnan, x, x, vl);
-    vm_b_t m_neginf = VM_VMAND_MM (
-      m_neg, VM_VMSEQ_VX (VM_BITS (x), 0xfff0000000000000ULL, vl), vl);
-    vm_f_t yinf = VM_VFMERGE_VVM (xpx, VM_VFMV_V_F (-1.0, vl),
-				  m_neginf, vl);
-    y = VM_VFMERGE_VVM (y, yinf, m_infnan, vl);
+    vm_b_t m_ltq = VM_VMFLT_VF (xr, -0.25, vl);
+    vm_b_t m_k1 = VM_VMSEQ_VX (VM_REINT_I_U (k), 1, vl);
+    vm_b_t m_y1a = VM_VMAND_MM (m_ltq, m_k1, vl);
+    vm_f_t y1a = VM_VFMUL_VF (
+      VM_VFSUB_VV (e2, VM_VFADD_VF (xr, 0.5, vl), vl), -2.0, vl);
+    y = VM_VFMERGE_VVM (y, y1a, m_y1a, vl);
   }
+
+  /* ---- special lanes ---- */
+  vm_f_t xpx = VM_VFADD_VV_M (m_infnan, x, x, vl);
+  vm_f_t vy = VM_VFMERGE_VVM (x, xpx, m_infnan, vl);
+  y = VM_VFMERGE_VVM (y, vy, m_excl, vl);
   return y;
 }
 

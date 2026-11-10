@@ -215,6 +215,7 @@ static const double vm_gam_expP[15][2] = {
     /* log1p(r) = r * sum_{j=0..10} (-1)^j r^j / (j+1) */		\
     vm_f_t vglg_sh = VM_VFMV_V_F (1.0 / 11.0, (vl));			\
     vm_f_t vglg_sl = VM_VFMV_V_F (0.0, (vl));				\
+    _Pragma ("GCC unroll 10")					\
     for (int vglg_j = 9; vglg_j >= 0; vglg_j--)				\
       {									\
 	vm_f_t vglg_a, vglg_b;						\
@@ -310,6 +311,7 @@ static const double vm_gam_expP[15][2] = {
 #define VM_GAM_POLY(rh, rl, tbl, n, th, tl, vl) do {			\
   vm_f_t vgp_h = VM_VFMV_V_F ((tbl)[(n) - 1][0], (vl));			\
   vm_f_t vgp_l = VM_VFMV_V_F ((tbl)[(n) - 1][1], (vl));			\
+  _Pragma ("GCC unroll 16")						\
   for (int vgp_i = (n) - 2; vgp_i >= 0; vgp_i--)				\
     {									\
       vm_f_t vgp_h2, vgp_l2;						\
