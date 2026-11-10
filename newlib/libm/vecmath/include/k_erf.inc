@@ -27,8 +27,10 @@
      |x| < 0.25           1 - (x + x*P/Q)          (fdlibm; cancellation
                                                     < 0.1 ulp here)
      |x| < 1.25           dd polynomial of degree 19, v = |x|-0.75
-     else                 exp(-x^2-0.5625+R/S)/x evaluated in dd and
-                          scaled by 2^512, then one scale-back multiply
+     else                 exp(-x^2-0.5625+rho(1/x^2))/x in dd, evaluated
+                          2^512 up then one scale-back multiply; rho is
+                          ONE rational over the whole range (fdlibm split
+                          it in two) and is folded into the dd exponent
      x <= -6              2 - erfc(|x|), tail argument clamped to 25 so
                           the answer 2 raises no UNDERFLOW
      NaN/Inf              (2*signbit) + 1/x        (fdlibm)
@@ -39,8 +41,17 @@
    itself is subnormal.  The final 2^-512 multiply is what rounds into
    the subnormal grid, so UNDERFLOW is raised exactly when C99 wants it.
 
+   The Horner loops are all force-unrolled (_Pragma unroll): at -O2 gcc
+   left them rolled, which cost 5 instructions (and a vector move) per
+   coefficient instead of 1 -- worth 17% of the whole erfc entry.
+
+   The two widest remaining chains (the erfc tail's rho rational and the
+   top of the mid-band polynomial) use Estrin form; both are accuracy
+   neutral (the mid-band one is scaled by v^7 before it reaches the
+   result) and the rho one actually lowered the worst erfc record.
+
    Accuracy: FULL-tier max_ulp erf 1.0000 (subnormal-x lanes only), erfc
-   0.9272; 0 fails / flags / sweep, verified with the MPFR framework.
+   0.7976; 0 fails / flags / sweep, verified with the MPFR framework.
 
    Depends on VM_EXP_MAIN (k_exp.inc) and the vm_exp_data table only; the
    dd helpers come from vecmath_dd.h.  Requires vecmath_rvvcompat.h,
@@ -130,15 +141,61 @@ static const double vm_erfc_mid[20][2] = {
   { -2.07972886144803726e-08, -1.43808182164070217e-24 },
 };
 
-/* expm1(rho) for rho = R/S in [-0.36, 0.01]: rho + rho^2*sum 1/k!.  */
-static const double vm_erf_e1[12] = {
-  5.00000000000000000e-01, 1.66666666666666657e-01,
-  4.16666666666666644e-02, 8.33333333333333322e-03,
-  1.38888888888888894e-03, 1.98412698412698413e-04,
-  2.48015873015873016e-05, 2.75573192239858925e-06,
-  2.75573192239858883e-07, 2.50521083854417202e-08,
-  2.08767569878681002e-09, 1.60590438368216133e-10,
+/* erfc tail factor rho(s) = log(erfc(x)*x) + x^2 + 0.5625, s = 1/x^2,
+   for the whole erfc tail 1.25 <= x <= 29 (s in [0.0012, 0.64]) as ONE
+   rational R(s)/S(s): the fdlibm two-range split (8/8 + 7/7) costs 30
+   fmas on every strip; this costs 22 and needs no range select.  The
+   fit is a weighted-Least-Squares rational Remez in the s basis,
+   max |error| 3.0e-19 (2^-61.6), i.e. 4 orders below the double
+   evaluation noise.  */
+static const double vm_erfc_rho_p[11] = {
+  -9.86494292470008714e-03, -9.27325069385170675e-01,
+  -2.82710618438656454e+01, -4.03452929272812810e+02,
+  -3.04795508031141935e+03, -1.26822117852048323e+04,
+  -2.88575213539372962e+04, -3.42455833275896002e+04,
+  -1.91849993277500871e+04, -4.16523694837352650e+03,
+  -2.17717161350280463e+02,
 };
+static const double vm_erfc_rho_q[11] = {
+  1.00000000000000000e+00, 4.33175409778828922e+01,
+  7.33637428028333261e+02, 6.30171022558705954e+03,
+  2.98387713174216042e+04, 7.94518245862397016e+04,
+  1.16682706117539492e+05, 8.91884692220622237e+04,
+  3.16615633436538446e+04, 4.15831657403713780e+03,
+  1.13231359553771043e+02,
+};
+
+/* Horner over an 11-coefficient polynomial in Estrin form (4 dependent fmas
+   instead of 10).  The rho rational is the widest chain left in the
+   tail and the tail is latency-bound at 8 lanes.  */
+#define VM_ERFC_HOR11(r, tbl, x, vl) do {				\
+  vm_f_t veh_x2 = VM_VFMUL_VV ((x), (x), (vl));			\
+  vm_f_t veh_x4 = VM_VFMUL_VV (veh_x2, veh_x2, (vl));			\
+  vm_f_t veh_x8 = VM_VFMUL_VV (veh_x4, veh_x4, (vl));			\
+  vm_f_t veh_a0 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[0], (vl)),		\
+				 (tbl)[1], (x), (vl));				\
+  vm_f_t veh_a1 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[2], (vl)),		\
+				 (tbl)[3], (x), (vl));				\
+  vm_f_t veh_a2 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[4], (vl)),		\
+				 (tbl)[5], (x), (vl));				\
+  vm_f_t veh_a3 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[6], (vl)),		\
+				 (tbl)[7], (x), (vl));				\
+  vm_f_t veh_a4 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[8], (vl)),		\
+				 (tbl)[9], (x), (vl));				\
+  vm_f_t veh_b0 = VM_VFMACC_VV (veh_a0, veh_a1, veh_x2, (vl));	\
+  vm_f_t veh_b1 = VM_VFMACC_VV (veh_a2, veh_a3, veh_x2, (vl));	\
+  vm_f_t veh_b2 = VM_VFMACC_VF (veh_a4, (tbl)[10], veh_x2, (vl));	\
+  vm_f_t veh_c0 = VM_VFMACC_VV (veh_b1, veh_b2, veh_x4, (vl));	\
+  (r) = VM_VFMACC_VV (veh_b0, veh_c0, veh_x4, (vl));			\
+} while (0)
+
+/* rho for the erfc tail: one range, no select, no divide chain.  */
+#define VM_ERFC_RHO(rho, s_, vl) do {					\
+  vm_f_t verh_p, verh_q;						\
+  VM_ERFC_HOR11 (verh_p, vm_erfc_rho_p, (s_), (vl));			\
+  VM_ERFC_HOR11 (verh_q, vm_erfc_rho_q, (s_), (vl));			\
+  (rho) = VM_VFDIV_VV (verh_p, verh_q, (vl));				\
+} while (0)
 
 /* erf/erfc magnitudes as raw bits (integer compares: NaN-safe).  */
 #define VM_ERF_BTINY	0x3e30000000000000ULL	/* 2^-28 */
@@ -161,6 +218,11 @@ static const double vm_erf_e1[12] = {
 #define VM_ERF_SINV	0x1p-512
 #define VM_ERF_SLN2H	3.54891356446691987e+02	/* 512*ln2, hi */
 #define VM_ERF_SLN2L	1.18735196868930537e-14	/* 512*ln2 - hi */
+/* 512*ln2 - 0.5625 as the same dd pair (the erfc tail subtracts fdlibm's
+   0.5625 and adds the shift; folding them into one constant saves a
+   two_sum -- the subtraction is exact in double).  */
+#define VM_ERF_CHI	3.54328856446691987e+02
+#define VM_ERF_CLO	1.18735196868930537e-14
 
 #endif /* VM_ERF_DATA */
 
@@ -168,6 +230,7 @@ static const double vm_erf_e1[12] = {
 #define VM_ERF_HOR(r, tbl, n, x, vl) do {				\
   int vehi;								\
   (r) = VM_VFMV_V_F ((tbl)[(n) - 1], (vl));				\
+  _Pragma ("GCC unroll 32")						\
   for (vehi = (n) - 2; vehi >= 0; vehi--)				\
     (r) = VM_VFMACC_VV (VM_VFMV_V_F ((tbl)[vehi], (vl)), (r), (x), (vl)); \
 } while (0)
@@ -330,13 +393,32 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
    pure dd Horner costs ~60 ns/element).  */
 #define VM_ERFC_MID_POLY(ph, pl, v, vl) do {				\
   int vemi;								\
-  (ph) = VM_VFMV_V_F (vm_erfc_mid[19][0], (vl));			\
-  for (vemi = 18; vemi >= 7; vemi--)					\
-    {									\
-      (ph) = VM_VFMUL_VV ((ph), (v), (vl));				\
-      (ph) = VM_VFADD_VF ((ph), vm_erfc_mid[vemi][0], (vl));	\
-    }									\
+  /* Degrees 19..7 in Estrin form: this block's rounding error is scaled\
+     by v^7 < 2^-7 before it reaches the result, so reassociating it is\
+     accuracy-free, and it takes six dependent fmas off the chain this\
+     band is bound by (13 -> 5 levels).  */\
+  vm_f_t vemi_v2 = VM_VFMUL_VV ((v), (v), (vl));\
+  vm_f_t vemi_v4 = VM_VFMUL_VV (vemi_v2, vemi_v2, (vl));\
+  vm_f_t vemi_a0 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[7][0], (vl)),\
+				 vm_erfc_mid[8][0], (v), (vl));\
+  vm_f_t vemi_a1 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[9][0], (vl)),\
+				 vm_erfc_mid[10][0], (v), (vl));\
+  vm_f_t vemi_a2 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[11][0], (vl)),\
+				 vm_erfc_mid[12][0], (v), (vl));\
+  vm_f_t vemi_a3 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[13][0], (vl)),\
+				 vm_erfc_mid[14][0], (v), (vl));\
+  vm_f_t vemi_a4 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[15][0], (vl)),\
+				 vm_erfc_mid[16][0], (v), (vl));\
+  vm_f_t vemi_a5 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[17][0], (vl)),\
+				 vm_erfc_mid[18][0], (v), (vl));\
+  vm_f_t vemi_b0 = VM_VFMACC_VV (vemi_a0, vemi_a1, vemi_v2, (vl));\
+  vm_f_t vemi_b1 = VM_VFMACC_VV (vemi_a2, vemi_a3, vemi_v2, (vl));\
+  vm_f_t vemi_b2 = VM_VFMACC_VV (vemi_a4, vemi_a5, vemi_v2, (vl));\
+  vm_f_t vemi_c0 = VM_VFMACC_VF (vemi_b2, vm_erfc_mid[19][0], vemi_v4, (vl));\
+  vm_f_t vemi_c1 = VM_VFMACC_VV (vemi_b1, vemi_c0, vemi_v4, (vl));\
+  (ph) = VM_VFMACC_VV (vemi_b0, vemi_c1, vemi_v4, (vl));\
   (pl) = VM_VFMV_V_F (0.0, (vl));					\
+  _Pragma ("GCC unroll 32")						\
   for (vemi = 6; vemi >= 0; vemi--)					\
     {									\
       vm_f_t vemi_u, vemi_e, vemi_s, vemi_t;				\
@@ -350,16 +432,15 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
     }									\
 } while (0)
 
-/* The 1.25 <= |x| erfc tail, out of line: it is the widest dependency
-   chain in the library (a double-double exp pair, multiply and divide),
-   and keeping it in its own function lets the compiler give it a clean
-   register budget instead of spilling against the other bands.  Returns
-   the pair 2^512 up.  */
+/* The 1.25 <= |x| erfc tail: exp(-x^2 - 0.5625 + rho(1/x^2))/x in dd,
+   Returns the pair 2^512 up.  rho is one range (VM_ERFC_RHO) and it is
+   folded into the dd exponent, so the chain is: two_prod x^2, two_sum
+   for the 512*ln2 shift, two_sum to fold rho, the exp core, one fma for
+   the exponent's lo part, and one dd multiply by the dd reciprocal.  */
 static inline __attribute__ ((always_inline)) vm_f_t
 VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
 		    vm_u64_t vau, size_t vl, vm_f_t *rlo)
 {
-  vm_f_t vone = VM_VFMV_V_F (1.0, (vl));
   vm_f_t mf_th, mf_tl;
   vm_f_t mf_targ = VM_VFMIN_VF (VM_VFMAX_VF (vax, 1.25, (vl)), 29.0, (vl));
   mf_targ = VM_VFMERGE_VFM (mf_targ, 25.0,
@@ -368,17 +449,12 @@ VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
 					     (vl)), (vl));
   vm_f_t mf_x2h, mf_x2l;
   VM_TWO_PROD (mf_x2h, mf_x2l, mf_targ, mf_targ, (vl));
-  vm_f_t mf_t0h, mf_t0l, mf_ah, mf_al;
-  VM_TWO_SUM (mf_t0h, mf_t0l, VM_VFNEG_V (mf_x2h, (vl)),
-		  VM_VFMV_V_F (-0.5625, (vl)), (vl));
-  VM_TWO_SUM (mf_ah, mf_al, mf_t0h, VM_VFMV_V_F (VM_ERF_SLN2H, (vl)), (vl));
-  mf_al = VM_VFADD_VV (VM_VFADD_VV (mf_t0l, mf_al, (vl)),
-			   VM_VFMV_V_F (VM_ERF_SLN2L, (vl)), (vl));
-  mf_al = VM_VFSUB_VV (mf_al, mf_x2l, (vl));
-  vm_f_t mf_eh, mf_el;
-  VM_ERF_EXP_DD (mf_eh, mf_el, mf_ah, (vl));
+  vm_f_t mf_ah, mf_al, mf_e1;
+  VM_TWO_SUM (mf_ah, mf_e1, VM_VFNEG_V (mf_x2h, (vl)),
+	      VM_VFMV_V_F (VM_ERF_CHI, (vl)), (vl));
+  mf_al = VM_VFSUB_VV (VM_VFADD_VF (mf_e1, VM_ERF_CLO, (vl)),
+		       mf_x2l, (vl));
   vm_f_t mf_rho;
-  vm_b_t mf_rb = VM_VMSGEU_VX (VM_BITS (mf_targ), VM_ERF_B286, (vl));
   /* One reciprocal feeds both the tail factor's s = 1/x^2 and the
      final dd division: the dd-corrected (rt, rt_lo) is good to ~2^-105,
      and s = (rt + rt_lo)^2 rebuilt with one fma keeps that accuracy, so
@@ -399,18 +475,20 @@ VM_KFN (erfc_tail) (vm_f_t x, vm_f_t vax, vm_b_t mf_neg, vm_b_t mf_tail,
 			 VM_VFMUL_VF (VM_VFMUL_VV (mf_rt, mf_rtl, (vl)),
 				      2.0, (vl)), (vl));
   vm_f_t mf_sinv = VM_VFADD_VV (mf_rt2, mf_rt2e, (vl));
-  VM_ERF_RHO (mf_rho, mf_sinv, mf_rb, (vl));
-  vm_f_t mf_sq = VM_VFMUL_VV (mf_rho, mf_rho, (vl));
-  vm_f_t mf_q;
-  VM_ERF_HOR (mf_q, vm_erf_e1, 12, mf_rho, (vl));
-  vm_f_t mf_s = VM_VFMACC_VV (mf_rho, mf_sq, mf_q, (vl));	/* expm1 */
-  vm_f_t mf_fh, mf_fl;
-  VM_TWO_SUM (mf_fh, mf_fl, vone, mf_s, (vl));
-  mf_fl = VM_VFADD_VV (mf_fl, mf_al, (vl));
-  mf_fl = VM_VFMACC_VV (mf_fl, mf_al, mf_s, (vl));
-  vm_f_t mf_dh, mf_dl;
-  VM_DD_MUL (mf_dh, mf_dl, mf_eh, mf_el, mf_fh, mf_fl, (vl));
-  VM_DD_MUL (mf_th, mf_tl, mf_dh, mf_dl, mf_rt, mf_rtl, (vl));
+  VM_ERFC_RHO (mf_rho, mf_sinv, (vl));
+  /* Fold rho into the dd exponent rather than expanding exp(rho) on its
+     own: two_sum is exact, so (mf_rh, mf_al + mf_rl) represents
+     -x^2 - 0.5625 + 512*ln2 + rho to full dd precision, and
+     exp(hi+lo) = exp(hi)*(1+lo) to first order (|lo| < 2^-43, so the
+     neglected lo^2/2 is below 2^-88).  This drops the 12-term expm1
+     polynomial, its two_sum and one dd multiply.  */
+  vm_f_t mf_rh, mf_rl;
+  VM_TWO_SUM (mf_rh, mf_rl, mf_ah, mf_rho, (vl));
+  mf_al = VM_VFADD_VV (mf_al, mf_rl, (vl));
+  vm_f_t mf_eh, mf_el;
+  VM_ERF_EXP_DD (mf_eh, mf_el, mf_rh, (vl));
+  mf_el = VM_VFMACC_VV (mf_el, mf_eh, mf_al, (vl));
+  VM_DD_MUL (mf_th, mf_tl, mf_eh, mf_el, mf_rt, mf_rtl, (vl));
   *rlo = mf_tl;
   return mf_th;
 }
