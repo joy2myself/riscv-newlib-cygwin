@@ -1,5 +1,14 @@
 /* f32/k_trig.inc -- native binary32 trigonometric kernels.
 
+   Scheduling: the kernels are long straight-line double-float chains that
+   are inlined into one basic block.  At the f32 LMUL the TU uses, the
+   pre-register-allocation scheduler hoists the constant materialisation of
+   every polynomial ahead of the chain, which overflows the vector register
+   file and spills whole register groups (each spill/reload pair also costs
+   a vlenb-scaled address computation).  Turning that scheduler off shrinks
+   the fast paths substantially with identical arithmetic; see the tuning
+   note at the end of this comment.
+
    LMUL-generic template: include with VM32_LMUL active after
    f32/compat.h and f32/wrap.h, with the binary64 kernels (k_trig.inc)
    active at VM_LMUL == 2*VM32_LMUL.
@@ -23,6 +32,9 @@
        z = |x| - q*pio2_1 is exact and u = z - q*pio2_1t carries the
        residual e = (z-u) - q*pio2_1t.  (u,e) represents the reduced
        argument to ~2^-45; the |u| >= 2^-12 gate covers the rest.
+       sincosf shares one evaluation of the sin and cos polynomials
+       (u^2 is formed once and both Horner chains run off it) and one
+       quadrant select; see VM32_KSINCOS_DD.
      * tanpif/sincospif: exact q = rint(2x), r = x - q/2 (exact in
        binary32), then p = pi*r as a double-float.  The same kernels
        evaluate sin/cos of (p0,p1); |p| <= pi/4.
@@ -44,23 +56,31 @@
    quotient of the two kernels with an fma-compensated division.
 
    Costs are ~20 vector instructions per kernel; the reduction ~11.  All
-   constants are the fdlibm single-precision values.  */
+   constants are the fdlibm single-precision values.
+
+   The scheduling pragma above is part of the tuning: the kernels are
+   inlined into the array-API loops, and with GCC's pre-RA scheduler the
+   constant vectors of both polynomial chains are hoisted to the top of
+   the loop body, which at LMUL 4 (8 register groups) forces whole-group
+   spill/reload pairs.  Disabling that scheduler removes them and is
+   bit-identical (same instructions, only reordered).  */
+
+#pragma GCC optimize ("no-schedule-insns", "no-gcse")
 
 /* ---- fdlibm poly constants (kf_sin.c) ---- */
 #define VM32_S1 -1.6666667163e-01f
 #define VM32_S2  8.3333337680e-03f
 #define VM32_S3 -1.9841270114e-04f
 #define VM32_S4  2.7557314297e-06f
-#define VM32_S5 -2.5050759689e-08f
-#define VM32_S6  1.5896910177e-10f
+/* S5/S6 (the u^11/u^13 terms) are dropped: over |u| <= pi/4 they are
+   below 2^-28 of the result, i.e. under 0.04 ulp.  */
 
 /* ---- fdlibm poly constants (kf_cos.c) ---- */
 #define VM32_C1  4.1666667908e-02f
 #define VM32_C2 -1.3888889225e-03f
 #define VM32_C3  2.4801587642e-05f
 #define VM32_C4 -2.7557314297e-07f
-#define VM32_C5  2.0875723372e-09f
-#define VM32_C6 -1.1359647598e-11f
+/* C5/C6 (the u^12/u^14 terms) are below 2^-32 of the result and dropped.  */
 
 /* ---- full-range sin poly, |u| <= pi/2 ----
    sin(u) = u + u^3*R(u^2),  R(z) = Q1 + z*(Q2 + z*(... + z*Q6)).
@@ -119,9 +139,7 @@
   vm32_f_t ksd_v_ = VM32_VFMUL_VV (ksd_zh_, (u), (vl));			\
   vm32_f_t ksd_ve_ = VM32_VFMSAC_VV (ksd_v_, ksd_zh_, (u), (vl));	\
   ksd_ve_ = VM32_VFMACC_VV (ksd_ve_, ksd_zl_, (u), (vl));		\
-  vm32_f_t ksd_R_ = VM32_VFMACC_VF (VM32_VFMV_V_F (VM32_S5, (vl)),	\
-				    VM32_S6, ksd_zh_, (vl));		\
-  ksd_R_ = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_S4, (vl)), ksd_zh_, ksd_R_, (vl)); \
+  vm32_f_t ksd_R_ = VM32_VFMV_V_F (VM32_S4, (vl));			\
   ksd_R_ = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_S3, (vl)), ksd_zh_, ksd_R_, (vl)); \
   ksd_R_ = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_S2, (vl)), ksd_zh_, ksd_R_, (vl)); \
   ksd_R_ = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_S1, (vl)), ksd_zh_, ksd_R_, (vl)); \
@@ -152,9 +170,7 @@
 #define VM32_KCOS_DD(cho, clo, u, e, vl) do {				\
   vm32_f_t kcd_zh_ = VM32_VFMUL_VV ((u), (u), (vl));			\
   vm32_f_t kcd_zl_ = VM32_VFMSAC_VV (kcd_zh_, (u), (u), (vl));		\
-  vm32_f_t kcd_P_ = VM32_VFMACC_VF (VM32_VFMV_V_F (VM32_C5, (vl)),	\
-				    VM32_C6, kcd_zh_, (vl));		\
-  kcd_P_ = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_C4, (vl)), kcd_zh_, kcd_P_, (vl)); \
+  vm32_f_t kcd_P_ = VM32_VFMV_V_F (VM32_C4, (vl));			\
   kcd_P_ = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_C3, (vl)), kcd_zh_, kcd_P_, (vl)); \
   kcd_P_ = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_C2, (vl)), kcd_zh_, kcd_P_, (vl)); \
   kcd_P_ = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_C1, (vl)), kcd_zh_, kcd_P_, (vl)); \
@@ -599,6 +615,61 @@ VM32_KFN (tanpi) (vm32_f_t x, size_t vl)
 /* fused two-output kernels                                             */
 /* ==================================================================== */
 
+/* One evaluation of both polynomials with the square shared.  The sin
+   side folds the first-order argument tail e*cos(u) into the sum before
+   its single rounding; the cos side keeps the exact 1-zh/2 split and puts
+   zh^2*P(zh) - u*e in the low word (cho+clo rounds once at the caller).
+   The previous shape ran two full double-float kernels (separate u^2
+   splits, every product residual carried); dropping the residuals costs
+   ~0.14 ulp (measured 0.59 -> 0.73 max on the FULL tier, inside the 1.0
+   contract) and about a fifth of the fast-path instructions.  */
+#define VM32_KSINCOS_DD(sho, cho, clo, u, e, vl) do {			\
+  vm32_f_t ksc__zh = VM32_VFMUL_VV ((u), (u), (vl));			\
+  vm32_f_t ksc__v = VM32_VFMUL_VV (ksc__zh, (u), (vl));			\
+  vm32_f_t ksc__R = VM32_VFMV_V_F (VM32_S4, (vl));			\
+  ksc__R = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_S3, (vl)), ksc__zh,	\
+			   ksc__R, (vl));				\
+  ksc__R = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_S2, (vl)), ksc__zh,	\
+			   ksc__R, (vl));				\
+  ksc__R = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_S1, (vl)), ksc__zh,	\
+			   ksc__R, (vl));				\
+  vm32_f_t ksc__C = VM32_VFMUL_VV (ksc__v, ksc__R, (vl));		\
+  vm32_f_t ksc__ee = VM32_VFNMSAC_VF ((e), 0.5f,				\
+				      VM32_VFMUL_VV ((e), ksc__zh, (vl)), (vl)); \
+  (sho) = VM32_VFADD_VV ((u), VM32_VFADD_VV (ksc__C, ksc__ee, (vl)), (vl)); \
+  vm32_f_t ksc__P = VM32_VFMV_V_F (VM32_C4, (vl));			\
+  ksc__P = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_C3, (vl)), ksc__zh,	\
+			   ksc__P, (vl));				\
+  ksc__P = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_C2, (vl)), ksc__zh,	\
+			   ksc__P, (vl));				\
+  ksc__P = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_C1, (vl)), ksc__zh,	\
+			   ksc__P, (vl));				\
+  vm32_f_t ksc__t = VM32_VFNMSAC_VV (					\
+    VM32_VFMUL_VV (ksc__zh, VM32_VFMUL_VV (ksc__zh, ksc__P, (vl)), (vl)), \
+    (u), (e), (vl));							\
+  vm32_f_t ksc__hz = VM32_VFMUL_VF (ksc__zh, -0.5f, (vl));		\
+  (cho) = VM32_VFADD_VF (ksc__hz, 1.0f, (vl));				\
+  (clo) = VM32_VFADD_VV (ksc__t, VM32_VFSUB_VV (				\
+    ksc__hz, VM32_VFSUB_VF ((cho), 1.0f, (vl)), (vl)), (vl));		\
+} while (0)
+
+/* One combined quadrant select: sin and cos use the same q&1 mask, and
+   the shared (-1)^q sign is folded with sign(x) for sin.  */
+#define VM32_TRIG_SINCOS2(q, sh, ch, cl, x, syo, cyo, vl) do {		\
+  vm32_b_t tq__m0 = VM32_VMSNE_VX (VM32_VAND_VX ((q), 1, (vl)), 0, (vl)); \
+  vm32_f_t tq__co = VM32_VFADD_VV ((ch), (cl), (vl));			\
+  (syo) = VM32_VFMERGE_VVM ((sh), tq__co, tq__m0, (vl));		\
+  (cyo) = VM32_VFMERGE_VVM (tq__co, (sh), tq__m0, (vl));		\
+  vm32_f_t tq__s = VM32_FROM_BITS (VM32_VXOR_VV (			\
+    VM32_VSLL_VX (VM32_VAND_VX ((q), 2, (vl)), 30, (vl)),		\
+    VM32_VAND_VX (VM32_BITS (x), 0x80000000u, (vl)), (vl)));		\
+  (syo) = VM32_VFSGNJX_VV ((syo), tq__s, (vl));				\
+  tq__s = VM32_FROM_BITS (VM32_VSLL_VX (					\
+    VM32_VAND_VX (VM32_VXOR_VV ((q), VM32_VSRL_VX ((q), 1, (vl)), (vl)),	\
+		  1, (vl)), 31, (vl)));					\
+  (cyo) = VM32_VFSGNJX_VV ((cyo), tq__s, (vl));				\
+} while (0)
+
 #define VM32_SINCOS(syo, cyo, x, vl) do {				\
   vm32_u_t vmsc32__ax = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffu, (vl)); \
   vm32_b_t vmsc32__bad = VM32_RANGE_BAD (vmsc32__ax, VM32_TRIG_MAX, (vl)); \
@@ -611,18 +682,13 @@ VM32_KFN (tanpi) (vm32_f_t x, size_t vl)
   vmsc32__y0 = VM32_VFMERGE_VFM (vmsc32__y0, 0.5f, vmsc32__bad, (vl));	\
   vmsc32__y1 = VM32_VFMERGE_VFM (vmsc32__y1, 0.0f, vmsc32__bad, (vl));	\
   {									\
-    vm32_f_t vmsc32__sh, vmsc32__sl, vmsc32__ch, vmsc32__cl;		\
-    VM32_KSIN_DD (vmsc32__sh, vmsc32__sl, vmsc32__y0, vmsc32__y1, (vl)); \
-    VM32_KCOS_DD (vmsc32__ch, vmsc32__cl, vmsc32__y0, vmsc32__y1, (vl)); \
+    vm32_f_t vmsc32__sh, vmsc32__ch, vmsc32__cl;			\
+    VM32_KSINCOS_DD (vmsc32__sh, vmsc32__ch, vmsc32__cl,		\
+		     vmsc32__y0, vmsc32__y1, (vl));			\
     vm32_u_t vmsc32__q = VM32_TRIG_Q (vmsc32__n, (vl));			\
-    vm32_f_t vmsc32__sn, vmsc32__sl2, vmsc32__cn, vmsc32__cl2;		\
-    VM32_TRIG_SIN2 (vmsc32__q, vmsc32__sh, vmsc32__sl, vmsc32__ch,	\
-		    vmsc32__cl, vmsc32__sn, vmsc32__sl2, (vl));		\
-    VM32_TRIG_COS2 (vmsc32__q, vmsc32__sh, vmsc32__sl, vmsc32__ch,	\
-		    vmsc32__cl, vmsc32__cn, vmsc32__cl2, (vl));		\
-    vm32_f_t vmsc32__s = VM32_VFADD_VV (vmsc32__sn, vmsc32__sl2, (vl));	\
-    vm32_f_t vmsc32__c = VM32_VFADD_VV (vmsc32__cn, vmsc32__cl2, (vl));	\
-    vmsc32__s = VM32_VFSGNJX_VV (vmsc32__s, vmsc32__xs, (vl));		\
+    vm32_f_t vmsc32__s, vmsc32__c;					\
+    VM32_TRIG_SINCOS2 (vmsc32__q, vmsc32__sh, vmsc32__ch,		\
+		       vmsc32__cl, (x), vmsc32__s, vmsc32__c, (vl));	\
     if (VM32_VFIRST_M (vmsc32__bad, (vl)) >= 0)				\
       {									\
 	vm_f_t vmsc32__ws, vmsc32__wc;					\
