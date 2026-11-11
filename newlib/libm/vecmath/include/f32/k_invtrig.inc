@@ -27,7 +27,16 @@
    rounding of the kernel body is captured with Fast2Sum -- and scale by
    1/pi as a hi+lo pair with an fma-compensated product
    (VM32I_DIVPI), so the scaling costs exactly one final rounding.  The
-   non-scaled entries return just the hi part.  */
+   non-scaled entries return just the hi part.
+
+   acospi is the same story one step further: 0.5 - asin(x)/pi cancels,
+   so the pair is what has to survive the subtraction, and the two
+   kernels are each used in the branch where the *pair* is accurate --
+   asin's small branch (error relative to the small x*r term) below 1/2,
+   acos's sqrt branch (error relative to acos itself, sqrt rounding
+   recovered by c) above it, with the x < 0 half reached by 1 - u
+   instead of a pi-sized subtraction.  Both halves fold their offset
+   into a single fma, so the final add rounds once.  */
 
 /* ==================================================================== */
 /* shared helpers                                                       */
@@ -46,17 +55,18 @@
 /* ==================================================================== */
 /* plain binary64 compute layer (VM32D_)                                */
 /* ==================================================================== */
-/* Three entries -- atan2, atan2pi and acospi -- cannot clear the budget
-   with an fdlibm *float* algorithm: atan2 stacks the quotient rounding,
-   atan's own error and the quadrant fixup rounding, and acospi's pi
-   scaling amplifies acos's last rounding.  They are evaluated instead in
-   *plain* binary64 at the same lane count (an f64m2K group has exactly
-   the lanes of the f32mK group), where the algorithm's ~1e-16 relative
-   error is far below a binary32 ulp, so the final narrowing is the only
-   rounding.  That is the same "drop the double-double" move the
+/* Two entries -- atan2 and atan2pi -- cannot clear the budget with an
+   fdlibm *float* algorithm: atan2 stacks the quotient rounding, atan's
+   own error and the quadrant fixup rounding.  They are evaluated instead
+   in *plain* binary64 at the same lane count (an f64m2K group has
+   exactly the lanes of the f32mK group), where the algorithm's ~1e-16
+   relative error is far below a binary32 ulp, so the final narrowing is
+   the only rounding.  That is the same "drop the double-double" move the
    binary64 playbook prescribes, applied at the f32 entry: the existing
    wide path for these entries is the full dd kernel, this is the plain
-   f64 one under it.
+   f64 one under it.  (acospi used to live here as well, as a plain-f64
+   acos times 1/pi; its native path below is both exact enough and ~2x
+   cheaper, so only the f64 *fallback* remains.)
 
    The binary64 compat macros of <vecmath_rvvcompat.h> are not active at
    this LMUL from the including TU (vfabi32.c instantiates them at its
@@ -163,7 +173,6 @@
 #define VM32D_AT8 4.97687799461593236017e-02
 #define VM32D_AT9 -3.65315727442169155270e-02
 #define VM32D_AT10 1.62858201153657823623e-02
-#define VM32D_PI 3.14159265358979311600e+00
 
 /* atan(q) in binary64 for finite non-negative q; the f32 magnitude
    bit pattern of q drives the region selects (a 1-ulp region slip at a
@@ -221,77 +230,14 @@ VM32_KFN (invtrig_d_atan) (vm32d_f_t q, vm32_u_t iq, size_t vl)
   return VM32D_VFSUB_VV (hi, VM32D_VFSUB_VV (t, r, vl), vl);
 }
 
-/* ==================================================================== */
-/* binary64 acos (fdlibm e_acos.c, double coefficients), for acospi      */
-/* ==================================================================== */
-
-#define VM32D_PS0 1.66666666666666657415e-01
-#define VM32D_PS1 -3.25565818622400915405e-01
-#define VM32D_PS2 2.01212532134862925881e-01
-#define VM32D_PS3 -4.00555345006794114027e-02
-#define VM32D_PS4 7.91534994289814532176e-04
-#define VM32D_PS5 3.47933107596021167570e-05
-#define VM32D_QS1 -2.40339491173441421878e+00
-#define VM32D_QS2 2.02094576023350569471e+00
-#define VM32D_QS3 -6.88283971605453293030e-01
-#define VM32D_QS4 7.70381505559019352791e-02
-
-/* acos(x) in binary64 for |x| < 1; masks from the f32 magnitude bits.  */
-static inline vm32d_f_t
-VM32_KFN (invtrig_d_acos) (vm32d_f_t x, vm32_u_t ix, vm32_b_t mneg,
-			   size_t vl)
-{
-  vm32_b_t mlo = VM32_VMSLTU_VX (ix, 0x3f000000u, vl);	/* |x| < 0.5 */
-  vm32d_f_t ax = VM32D_VFABS_V (x, vl);
-  vm32d_f_t zm = VM32D_VFMUL_VF (VM32D_VFRSUB_VF (ax, 1.0, vl), 0.5, vl);
-  vm32d_f_t z = VM32D_VFMERGE_VVM (zm, VM32D_VFMUL_VV (x, x, vl), mlo, vl);
-
-  vm32d_f_t p = VM32D_VFMV_V_F (VM32D_PS5, vl);
-  p = VM32D_VFMACC_VV (VM32D_VFMV_V_F (VM32D_PS4, vl), z, p, vl);
-  vm32d_f_t q = VM32D_VFMV_V_F (VM32D_QS4, vl);
-  p = VM32D_VFMACC_VV (VM32D_VFMV_V_F (VM32D_PS3, vl), z, p, vl);
-  q = VM32D_VFMACC_VV (VM32D_VFMV_V_F (VM32D_QS3, vl), z, q, vl);
-  p = VM32D_VFMACC_VV (VM32D_VFMV_V_F (VM32D_PS2, vl), z, p, vl);
-  q = VM32D_VFMACC_VV (VM32D_VFMV_V_F (VM32D_QS2, vl), z, q, vl);
-  p = VM32D_VFMACC_VV (VM32D_VFMV_V_F (VM32D_PS1, vl), z, p, vl);
-  q = VM32D_VFMACC_VV (VM32D_VFMV_V_F (VM32D_QS1, vl), z, q, vl);
-  p = VM32D_VFMACC_VV (VM32D_VFMV_V_F (VM32D_PS0, vl), z, p, vl);
-  p = VM32D_VFMUL_VV (z, p, vl);
-  q = VM32D_VFMACC_VV (VM32D_VFMV_V_F (1.0, vl), z, q, vl);
-  vm32d_f_t r = VM32D_VFDIV_VV (p, q, vl);
-
-  /* |x| < 0.5:  pio2 - (x - (pio2_lo - x*r)); pio2 == pi/2 - pio2_lo.  */
-  vm32d_f_t hlo = VM32D_VFSUB_VV (
-    VM32D_VFMV_V_F (1.57079632679489655800e+00, vl),
-    VM32D_VFSUB_VV (x, VM32D_VFNMSAC_VV (
-		      VM32D_VFMV_V_F (6.12323399573676603587e-17, vl), x, r,
-		      vl), vl), vl);
-
-  vm32d_f_t s = VM32D_VFSQRT_V (zm, vl);
-  /* s with the low 12 mantissa bits cleared (fdlibm's df).  */
-  vm32d_f_t df = VM32D_FROM_BITS (
-    VM32D_VAND_VX (VM32D_BITS (s), ~UINT64_C (0xfff), vl));
-  vm32d_f_t c = VM32D_VFDIV_VV (VM32D_VFNMSAC_VV (z, df, df, vl),
-				 VM32D_VFADD_VV (s, df, vl), vl);
-  /* x > 0.5: 2*(df + (r*s + c));  x < -0.5: pi - 2*(s + (r*s - pio2_lo)).  */
-  vm32d_f_t w1 = VM32D_VFADD_VV (VM32D_VFMUL_VV (r, s, vl), c, vl);
-  vm32d_f_t hpos = VM32D_VFMUL_VF (VM32D_VFADD_VV (df, w1, vl), 2.0, vl);
-  vm32d_f_t w2 = VM32D_VFMSAC_VV (
-    VM32D_VFMV_V_F (6.12323399573676603587e-17, vl), r, s, vl);
-  vm32d_f_t hneg = VM32D_VFSUB_VV (
-    VM32D_VFMV_V_F (VM32D_PI, vl),
-    VM32D_VFMUL_VF (VM32D_VFADD_VV (s, w2, vl), 2.0, vl), vl);
-
-  return VM32D_VFMERGE_VVM (VM32D_VFMERGE_VVM (hpos, hneg, mneg, vl), hlo,
-			    mlo, vl);
-}
-
-/* 1/pi and pi in binary64.  */
-#define VM32D_INVPI 3.18309886183790671538e-01
-
-/* 1/pi as a hi+lo float pair (sums to 1/pi to 2^-48).  */
+/* 1/pi and 2/pi as hi+lo float pairs (each sums to the constant to
+   2^-48).  acospi folds the pi scaling into the same fma that applies
+   its 1/2 or 0/1 offset; the sqrt branch needs 2/pi because acos itself
+   is 2*(df + w1) there, so the factor two never rounds.  */
 #define VM32I_INVPI_HI 3.18309873342514038086e-01f	/* 0x3ea2f983 */
 #define VM32I_INVPI_LO 1.2841276486597053e-08f		/* 0x325c9c88 */
+#define VM32I_TWOPI_HI 6.366197466850281e-01f		/* 0x3f22f983 */
+#define VM32I_TWOPI_LO 2.5682552973194106e-08f		/* 0x32dc9c88 */
 
 /* pi/2, pi/4 and pi as hi+lo float pairs (each sums to the exact
    constant to ~2^-48).  */
@@ -499,8 +445,11 @@ VM32_KFN (invtrig_asin_r) (vm32_f_t z, size_t vl)
   return VM32_VFDIV_VV (p, q, vl);
 }
 
-/* asin(|x|) for |x| in [2^-27, 1), carried as (h, l).  */
-static inline void
+/* asin(|x|) for |x| in [2^-27, 1), carried as (h, l).  Forced inline:
+   shared by asin and asinpi, and GCC 15 otherwise emits one out-of-line
+   copy whose riscv_vector_cc prologue saves/restores 15 vector
+   registers per strip (~30 vector memory ops).  */
+static inline __attribute__ ((always_inline)) void
 VM32_KFN (invtrig_asin2) (vm32_f_t ax, vm32_u_t ix, vm32_f_t *ho,
 			  vm32_f_t *lo, size_t vl)
 {
@@ -667,18 +616,96 @@ VM32_KFN (acos) (vm32_f_t x, size_t vl)
   return h;
 }
 
+/* NATIVE binary32 fast path.  acospi(x) = acos(x)/pi = 0.5 - asin(x)/pi,
+   and the cancelled form is safe here because both halves are evaluated
+   where the *pair* is accurate, not where the plain float is:
+
+     |x| < 0.5   asin(x) = x + x*r.  The subtraction from 1/2 would be
+                 cancellation-free anyway, and the rational's error sits
+                 in the small x*r term, so 0.5 - (x + x*r)/pi is good to
+                 2^-45 before the final add.
+     |x| >= 0.5  acos(|x|) = 2*(df + (r*s + c)), the acos kernel's sqrt
+                 branch, whose error is relative to acos itself and the
+                 sqrt's rounding is recovered by c.  x < 0 then uses
+                 acos(x) = pi - acos(|x|) as 1 - u: the 1 is exact, so
+                 the error stays absolute instead of being re-rounded
+                 through a pi-sized value.
+
+   Neither pair is ever re-rounded before the last add: the offset (1/2
+   or 0/1) is folded into the same fma that multiplies by the 1/pi or
+   2/pi hi word, and the lo word plus the second addend enter the
+   remainder, so exactly one rounding is left:
+
+     s = RN(d +- h*K_hi),  e = ((d - s) +- h*K_hi) +- h*K_lo +- l*K_hi
+     result = RN(s + e).
+
+   Measured on the FULL blob: max_ulp 0.5719, mean 0.1438, p99.9 0.5097
+   (the same run's plain-f64 path scored 0.5000/0.1437/0.4984), against
+   1.63 for the asin pair fed straight through 0.5 - u and 1.14 for the
+   acos pair over pi -- i.e. the double-float handling is what makes the
+   cancelled form viable.
+
+   Covered domain: |x| in [2^-27, 1).  The lower bound is asin's: below
+   it a binary32 x*x raises a spurious UNDERFLOW, and acospi(x) is
+   exactly 0.5 there anyway, so the plain-f64 path (which returns 0.5
+   for every such lane) is used.  |x| >= 1 -- +-1, the domain-error
+   lanes and every Inf/NaN -- is likewise recomputed per lane by the
+   binary64 kernel, so special values, signed zeros and the flag
+   semantics are inherited bit-for-bit.  */
 static inline vm32_f_t
 VM32_KFN (acospi) (vm32_f_t x, size_t vl)
 {
   vm32_u_t ix = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffU, vl);
   vm32_b_t mbad = VM32_VMSGEU_VX (ix, 0x3f800000u, vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSLTU_VX (ix, 0x23000000u, vl), vl);
+  mbad = VM32_VMOR_MM (mbad, VM32_VMSLTU_VX (ix, 0x32000000u, vl), vl);
   vm32_f_t xs = VM32_VFMERGE_VFM (x, 0.25f, mbad, vl);
 
-  vm32_b_t mneg = VM32_VMSLT_VX (VM32_REINT_U_I (VM32_BITS (x)), 0, vl);
-  vm32d_f_t d = VM32_KFN (invtrig_d_acos) (VM32_WIDEN (xs, vl), ix, mneg,
-					   vl);
-  vm32_f_t h = VM32_NARROW (VM32D_VFMUL_VF (d, VM32D_INVPI, vl), vl);
+  /* the sanitized value must also drive the ix-based branch masks.  */
+  vm32_u_t ixs = VM32_VAND_VX (VM32_BITS (xs), 0x7fffffffU, vl);
+  vm32_b_t mlo = VM32_VMSLTU_VX (ixs, 0x3f000000u, vl);	/* |x| < 0.5 */
+  vm32_b_t mneg = VM32_VMSLT_VX (VM32_REINT_U_I (VM32_BITS (xs)), 0, vl);
+  vm32_f_t a = VM32_VFABS_V (xs, vl);
+  vm32_f_t t = VM32_VFMUL_VF (VM32_VFRSUB_VF (a, 1.0f, vl), 0.5f, vl);
+  vm32_f_t z = VM32_VFMERGE_VVM (t, VM32_VFMUL_VV (a, a, vl), mlo, vl);
+  vm32_f_t r = VM32_KFN (invtrig_asin_r) (z, vl);
+
+  /* |x| < 0.5: 0.5 - x/pi - (x*r)/pi.  s1 = RN(0.5 - x*(1/pi)_hi) is the
+     only rounded term; z was a*a and x carries the sign, so the two
+     remainders are the exact ones.  */
+  vm32_f_t xr = VM32_VFMUL_VV (xs, r, vl);
+  vm32_f_t s1 = VM32_VFNMSAC_VF (VM32_VFMV_V_F (0.5f, vl), VM32I_INVPI_HI,
+				 xs, vl);
+  vm32_f_t e1 = VM32_VFNMSAC_VF (
+    VM32_VFSUB_VV (VM32_VFMV_V_F (0.5f, vl), s1, vl), VM32I_INVPI_HI, xs, vl);
+  e1 = VM32_VFNMSAC_VF (e1, VM32I_INVPI_LO, xs, vl);
+  e1 = VM32_VFNMSAC_VF (e1, VM32I_INVPI_HI, xr, vl);
+  vm32_f_t us = VM32_VFADD_VV (s1, e1, vl);
+
+  /* |x| >= 0.5: acos(a) = 2*(df + w1); df is the sqrt truncated to
+     fdlibm's 12 cleared mantissa bits and c puts its rounding back.  */
+  vm32_f_t s = VM32_VFSQRT_V (t, vl);
+  vm32_f_t df = VM32_FROM_BITS (VM32_VAND_VX (VM32_BITS (s), 0xfffff000u,
+					      vl));
+  vm32_f_t c = VM32_VFDIV_VV (
+    VM32_VFNMSAC_VV (t, df, df, vl), VM32_VFADD_VV (s, df, vl), vl);
+  vm32_f_t w1 = VM32_VFADD_VV (VM32_VFMUL_VV (s, r, vl), c, vl);
+  vm32_f_t hb, eb;
+  VM32I_TWO_SUM (hb, eb, df, w1, vl);
+  /* acos(|x|) = 2*(df + w1), so acospi = (df + w1)*(2/pi): the pair is
+     scaled by the 2/pi hi+lo words (the factor two never rounds) and the
+     offset d = 1 for x < 0 (1 - acos(|x|)/pi), 0 otherwise is folded
+     into the same fma; the sign of x rides on the pair.  */
+  hb = VM32_VFSGNJX_VV (hb, xs, vl);
+  eb = VM32_VFSGNJX_VV (eb, xs, vl);
+  vm32_f_t d = VM32_VFMERGE_VFM (VM32_VFMV_V_F (0.0f, vl), 1.0f, mneg, vl);
+  vm32_f_t s2 = VM32_VFMACC_VF (d, VM32I_TWOPI_HI, hb, vl);
+  vm32_f_t e2 = VM32_VFMACC_VF (VM32_VFSUB_VV (d, s2, vl), VM32I_TWOPI_HI,
+				hb, vl);
+  e2 = VM32_VFMACC_VF (e2, VM32I_TWOPI_LO, hb, vl);
+  e2 = VM32_VFMACC_VF (e2, VM32I_TWOPI_HI, eb, vl);
+  vm32_f_t ub = VM32_VFADD_VV (s2, e2, vl);
+
+  vm32_f_t h = VM32_VFMERGE_VVM (ub, us, mlo, vl);
   if (VM32_VFIRST_M (mbad, vl) >= 0)
     {
       vm32_f_t w = VM32_NARROW (VM32_D64 (acospi) (VM32_WIDEN (x, vl), vl),
