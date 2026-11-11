@@ -15,8 +15,10 @@
                                                     whose answer is normal)
      |x| < 0.84375        x + x*P(x^2)/Q(x^2)      (fdlibm s_erf.c)
      |x| < 1.25           sign(x) * (erx + P1/Q1)  (fdlibm)
-     |x| < 6              1 - exp(-z^2-0.5625+d2+R/S)/x  with z = x
-                          truncated to 21 bits (z*z exact) and one exp
+     |x| < 6              1 - exp(-z^2-0.5625+d2+rho(1/x^2))/x  with z = x
+                          truncated to 21 bits (z*z exact) and one exp;
+                          rho is the SAME one-range rational erfc's tail
+                          uses (its range contains this band's)
      |x| >= 6             sign(x)                  (rounds to 1)
      NaN/Inf              sign(x) + 1/x            (fdlibm: qNaN quiet,
                                                     sNaN invalid via 1/x,
@@ -26,7 +28,9 @@
      |x| < 2^-56          1 - x
      |x| < 0.25           1 - (x + x*P/Q)          (fdlibm; cancellation
                                                     < 0.1 ulp here)
-     |x| < 1.25           dd polynomial of degree 19, v = |x|-0.75
+     |x| < 1.25           degree-19 polynomial in v = |x|-0.75: the top
+                          degrees in plain Estrin form, the low three in
+                          compensated Horner form (see VM_ERFC_MID_POLY)
      else                 exp(-x^2-0.5625+rho(1/x^2))/x in dd, evaluated
                           2^512 up then one scale-back multiply; rho is
                           ONE rational over the whole range (fdlibm split
@@ -45,13 +49,26 @@
    left them rolled, which cost 5 instructions (and a vector move) per
    coefficient instead of 1 -- worth 17% of the whole erfc entry.
 
-   The two widest remaining chains (the erfc tail's rho rational and the
-   top of the mid-band polynomial) use Estrin form; both are accuracy
-   neutral (the mid-band one is scaled by v^7 before it reaches the
-   result) and the rho one actually lowered the worst erfc record.
+   Chains: the erfc tail's rho rational and the top of the mid-band
+   polynomial use Estrin form, and the mid band's low degrees use a
+   COMPENSATED Horner (an fma two_prod + a two_sum per step feeding one
+   unnormalised low accumulator) rather than a dd one: 11 vector ops per
+   step instead of 16, a two-deep chain instead of six, and the same
+   accuracy (the only rounding left in those degrees is the final add).
+
+   Divides: nothing in the hot path uses vfdiv any more.  The erf tail's
+   1/x, its band quotient, the mid-band rho's quotient and the small
+   band's P/Q all come from VM_RCP_FULL / VM_QDIV (vfrec7 + Newton, with
+   an fma residual on the quotients).  A dependent vfdiv chain measures
+   50 ns/element on the VLEN 256 board against 26 for the estimate plus
+   three steps, and the reciprocal is in every tail strip.  The results
+   are bit-identical to vfdiv's on the whole FULL blob set.
 
    Accuracy: FULL-tier max_ulp erf 1.0000 (subnormal-x lanes only), erfc
-   0.7976; 0 fails / flags / sweep, verified with the MPFR framework.
+   0.7976, erff 0.5005, erfcf 0.5312; 0 fails / flags / sweep, verified
+   with the MPFR framework.  The erfc mid band's own worst case is 0.66
+   ulp (0.5 of it the result rounding) and the tail's worst is the
+   0.7976 above, set by the plain-double evaluation of rho.
 
    Depends on VM_EXP_MAIN (k_exp.inc) and the vm_exp_data table only; the
    dd helpers come from vecmath_dd.h.  Requires vecmath_rvvcompat.h,
@@ -84,34 +101,6 @@ static const double vm_erf_qa[6] = {
   7.18286544141962662868e-02, 1.26171219808761642112e-01,
   1.36370839120290507362e-02, 1.19844998467991074170e-02,
 };
-/* erfc tail rational f(s) = log(erfc(x)*x)+x^2+0.5625, s = 1/x^2.
-   fdlibm's two ranges; plain-double evaluation is enough for the erfc
-   budget (measured: the tail region contributes no >1 ulp record).  */
-static const double vm_erf_ra[8] = {
-  -9.86494403484714822705e-03, -6.93858572707181764372e-01,
-  -1.05586262253232909814e+01, -6.23753324503260060396e+01,
-  -1.62396669462573470355e+02, -1.84605092906711035994e+02,
-  -8.12874355063065934246e+01, -9.81432934416914548592e+00,
-};
-static const double vm_erf_sa[8] = {
-  1.96512716674392571292e+01, 1.37657754143519042600e+02,
-  4.34565877475229228821e+02, 6.45387271733267880336e+02,
-  4.29008140027567833386e+02, 1.08635005541779435134e+02,
-  6.57024977031928170135e+00, -6.04244152148580987438e-02,
-};
-static const double vm_erf_rb[7] = {
-  -9.86494292470009928597e-03, -7.99283237680523006574e-01,
-  -1.77579549177547519889e+01, -1.60636384855821916062e+02,
-  -6.37566443368389627722e+02, -1.02509513161107724954e+03,
-  -4.83519191608651397019e+02,
-};
-static const double vm_erf_sb[7] = {
-  3.03380607434824582924e+01, 3.25792512996573918826e+02,
-  1.53672958608443695994e+03, 3.19985821950859553908e+03,
-  2.55305040643316442583e+03, 4.74528541206955367215e+02,
-  -2.24409524465858183362e+01,
-};
-
 /* 2/sqrt(pi): erf(x) = x*C for |x| < 2^-28 (one rounding; the product is
    exact in all but the last bit and the constant is within 4.6e-18).  */
 #define VM_ERF_C2SPI	1.12837916709551257390e+00
@@ -189,12 +178,14 @@ static const double vm_erfc_rho_q[11] = {
   (r) = VM_VFMACC_VV (veh_b0, veh_c0, veh_x4, (vl));			\
 } while (0)
 
-/* rho for the erfc tail: one range, no select, no divide chain.  */
+/* rho for the erfc tail: one range, no select, and the quotient comes
+   from VM_QDIV (vfrec7 + Newton + residual) rather than vfdiv.vv -- same
+   accuracy, ~20 ns less latency in the tail both boards pay per strip.  */
 #define VM_ERFC_RHO(rho, s_, vl) do {					\
   vm_f_t verh_p, verh_q;						\
   VM_ERFC_HOR11 (verh_p, vm_erfc_rho_p, (s_), (vl));			\
   VM_ERFC_HOR11 (verh_q, vm_erfc_rho_q, (s_), (vl));			\
-  (rho) = VM_VFDIV_VV (verh_p, verh_q, (vl));				\
+  VM_QDIV ((rho), verh_p, verh_q, (vl));				\
 } while (0)
 
 /* erf/erfc magnitudes as raw bits (integer compares: NaN-safe).  */
@@ -235,28 +226,18 @@ static const double vm_erfc_rho_q[11] = {
     (r) = VM_VFMACC_VV (VM_VFMV_V_F ((tbl)[vehi], (vl)), (r), (x), (vl)); \
 } while (0)
 
-/* rho = R/S with the two fdlibm ranges merged by mask (erfc tail).  */
-#define VM_ERF_RHO(rho, s_, rb, vl) do {					\
-  vm_f_t vrh_ra, vrh_sa, vrh_rb, vrh_sb;				\
-  VM_ERF_HOR (vrh_ra, vm_erf_ra, 8, (s_), (vl));			\
-  VM_ERF_HOR (vrh_sa, vm_erf_sa, 8, (s_), (vl));			\
-  vrh_sa = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), (s_), vrh_sa, (vl));			\
-  VM_ERF_HOR (vrh_rb, vm_erf_rb, 7, (s_), (vl));			\
-  VM_ERF_HOR (vrh_sb, vm_erf_sb, 7, (s_), (vl));			\
-  vrh_sb = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), (s_), vrh_sb, (vl));			\
-  vrh_ra = VM_VFMERGE_VVM (vrh_ra, vrh_rb, (rb), (vl));			\
-  vrh_sa = VM_VFMERGE_VVM (vrh_sa, vrh_sb, (rb), (vl));			\
-  (rho) = VM_VFDIV_VV (vrh_ra, vrh_sa, (vl));				\
-} while (0)
-
-/* erf small branch, plain double: ph = x0 + x0*(P/Q).  */
+/* erf small branch, plain double: ph = x0 + x0*(P/Q).  The quotient
+   comes from VM_QDIV (vfrec7 + three Newton steps + an fma residual)
+   instead of vfdiv.vv: same ~half-ulp accuracy, ~20 ns less latency on
+   the boards we measure.  */
 #define VM_ERF_SMALL(ph, x0, vl) do {					\
   vm_f_t vefs_z = VM_VFMUL_VV ((x0), (x0), (vl));			\
-  vm_f_t vefs_r, vefs_s;						\
+  vm_f_t vefs_r, vefs_s, vefs_q;					\
   VM_ERF_HOR (vefs_r, vm_erf_pp, 5, vefs_z, (vl));			\
   VM_ERF_HOR (vefs_s, vm_erf_qq, 5, vefs_z, (vl));			\
   vefs_s = VM_VFMACC_VV (VM_VFMV_V_F (1.0, (vl)), vefs_z, vefs_s, (vl));			\
-  (ph) = VM_VFMACC_VV ((x0), (x0), VM_VFDIV_VV (vefs_r, vefs_s, (vl)), (vl)); \
+  VM_QDIV (vefs_q, vefs_r, vefs_s, (vl));				\
+  (ph) = VM_VFMACC_VV ((x0), (x0), vefs_q, (vl));			\
 } while (0)
 
 /* dd exp via the shared exp core: returns (eh, el) with hi+lo == exp(x) to
@@ -292,8 +273,14 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
      lanes divide 1 by 1: that keeps the divide, underflow and overflow
      flags of a lane whose answer never uses the reciprocal.  */
   vm_b_t me_tailb = VM_VMAND_MM (me_tail, VM_VMNOT_M (me_erx, vl), vl);
-  vm_f_t vet_rt = VM_VFRDIV_VF (VM_VFMERGE_VVM (vone, vax, me_tailb, vl),
-				1.0, vl);
+  /* vfrec7 + 3 Newton steps instead of vfdiv.vf: the divide's latency is
+     the longest single stall in this band (a dependent vfdiv chain
+     measures 50 ns/element on the VLEN 256 board against 26 for the
+     estimate plus three steps), and 2^-56 relative is all this band
+     needs -- erf = 1 - q puts the q budget at 1e-15, four orders
+     looser than erfc's tail.  */
+  vm_f_t vet_rt;
+  VM_RCP_FULL (vet_rt, VM_VFMERGE_VVM (vone, vax, me_tailb, vl), (vl));
 
   /* |x| < 2^-28: x * 2/sqrt(pi) */
   vm_f_t vet_tiny = VM_VFMUL_VF (VM_VFMERGE_VVM (vzero, x, me_tiny, vl),
@@ -321,8 +308,9 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
       VM_ERF_HOR (vet_epa, vm_erf_pa, 7, vet_sm, (vl));
       VM_ERF_HOR (vet_eqa, vm_erf_qa, 6, vet_sm, (vl));
       vet_eqa = VM_VFMACC_VV (vone, vet_sm, vet_eqa, (vl));
-      vet_erx = VM_VFADD_VF (VM_VFDIV_VV (vet_epa, vet_eqa, (vl)),
-			     VM_ERF_ERX_CONST, (vl));
+      vm_f_t vet_eq;
+      VM_QDIV (vet_eq, vet_epa, vet_eqa, (vl));
+      vet_erx = VM_VFADD_VF (vet_eq, VM_ERF_ERX_CONST, (vl));
       vet_erx = VM_VFSGNJ_VV (vet_erx, x, (vl));
     }
 
@@ -344,15 +332,19 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
       vm_f_t vet_d2 = VM_VFMUL_VV (VM_VFSUB_VV (vet_z, vet_xt, (vl)),
 				   VM_VFADD_VV (vet_z, vet_xt, (vl)), (vl));
       vm_f_t vet_s = VM_VFMUL_VV (vet_rt, vet_rt, (vl));
-      vm_b_t vet_rb = VM_VMSGEU_VX (VM_BITS (vet_xt), VM_ERF_B286, (vl));
+      /* The one-range rho rational (VM_ERFC_RHO) covers 1/x^2 in
+	 [0.0012, 0.64], which contains this band's [0.0278, 0.64], and it
+	 is an order of magnitude more accurate than the erf tail needs
+	 (erf = 1 - q makes the budget 1e-15 relative on q, not 1e-17).
+	 It costs 22 fmas against fdlibm's 30 and needs no range mask.  */
       vm_f_t vet_rho;
-      VM_ERF_RHO (vet_rho, vet_s, vet_rb, (vl));
+      VM_ERFC_RHO (vet_rho, vet_s, (vl));
       vm_f_t vet_S = VM_VFADD_VV (vet_T, VM_VFADD_VV (vet_d2, vet_rho, (vl)),
 				  (vl));
       vm_f_t vet_scale, vet_tmp;
       VM_EXP_MAIN (vet_scale, vet_tmp, vet_S, (vl));
       vm_f_t vet_et = VM_VFMACC_VV (vet_scale, vet_scale, vet_tmp, (vl));
-      vet_tv = VM_VFRSUB_VF (VM_VFMUL_VV (vet_et, vet_rt, (vl)), 1.0, (vl));
+      vet_tv = VM_VFNMSAC_VV (vone, vet_et, vet_rt, (vl));	/* 1 - et/x */
       vet_tv = VM_VFSGNJ_VV (vet_tv, x, (vl));
     }
 
@@ -381,55 +373,101 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
 
 /* ---- erfc --------------------------------------------------------- */
 
-/* dd Horner of the degree-19 midpoint polynomial; v is exact.  */
-/* Degree-19 dd interpolant, mixed-precision Horner: the high-order terms
-   run in plain double (their partial sums are tiny and every error there
-   is damped by v^k), then the low-order terms run in double-double.
-   Verified against the exact polynomial: 0.000 ulp difference over
-   v in [-0.5, 0.5] with the plain part down to coefficient 7, and 1.0 ulp
-   with one more plain step, so the split sits at the edge.  It shortens
-   the dependency chain, which is what this band is bound by (the same
-   polynomial in a pure plain-double Horner makes the band free, and a
-   pure dd Horner costs ~60 ns/element).  */
+/* Mid-band polynomial P(v) = sum_{k=0..19} c_k v^k, v = |x| - 0.75 in
+   [-0.5, 0.5], evaluated so that the ONLY rounding that reaches the
+   result is the final p + L.
+
+   Degrees 19..3 run in plain double in Estrin form on the hi
+   coefficients alone: their error is damped by v^3 < 2^-3, which puts it
+   at ~1e-20 (0.001 ulp) -- the dropped lo parts of those coefficients
+   sum to less than 1e-19 as well, so hi is all this block needs.
+
+   The three low degrees then run a COMPENSATED Horner instead of a dd
+   one.  One step computes p*v + c_k = s + t + e_true with s = RN(u + c_k)
+   (u = RN(p*v)), t the exact two_sum residual and e_true = p*v - u the
+   exact product residual; t + e_true + c_k's lo part accumulates into a
+   single double L that is multiplied by v (exactly) at each step.  L is
+   ~1e-16 relative to p, so its own rounding is ~1e-32 relative: the
+   steps are never renormalised, and the pair (p, L) that leaves the
+   macro carries the polynomial to ~2^-105 -- both users of it (the
+   x < 0 lane's 2 - p and the x > 0 lane's p + L) then round exactly
+   once.  Cost per step: 11 vector ops
+   and a two-deep chain (the dd Horner it replaces spent 15 ops and a
+   six-deep chain on the same step).  Emulated op by op in exact
+   arithmetic over |v| <= 0.5 the whole band is 0.66 ulp worst (0.5 of
+   it the final result rounding) against 0.50 for the old 7-step dd
+   Horner and 0.006 for the coefficients' own fit -- the 0.5 ulp of the
+   result rounding is what is left, and the band is no longer the worst
+   erfc record (the tail's rho evaluation is, at 0.7976).  */
+#define VM_ERFC_MID_STEP(p_, l_, k, v, vl) do {				\
+  vm_f_t vms_u = VM_VFMUL_VV ((p_), (v), (vl));				\
+  vm_f_t vms_s = VM_VFADD_VF (vms_u, vm_erfc_mid[k][0], (vl));		\
+  vm_f_t vms_z = VM_VFSUB_VV (vms_s, vms_u, (vl));				\
+  vm_f_t vms_w = VM_VFSUB_VV (vms_s, vms_z, (vl));				\
+  vm_f_t vms_t = VM_VFSUB_VV (vms_u, vms_w, (vl));				\
+  vm_f_t vms_en = VM_VFNMSAC_VV (vms_u, (p_), (v), (vl));		\
+  vms_t = VM_VFADD_VV (vms_t,						\
+		       VM_VFRSUB_VF (vms_z, vm_erfc_mid[k][0], (vl)),	\
+		       (vl));						\
+  vms_t = VM_VFMACC_VV (vms_t, (l_), (v), (vl));			\
+  vms_t = VM_VFSUB_VV (vms_t, vms_en, (vl));				\
+  (l_) = VM_VFADD_VF (vms_t, vm_erfc_mid[k][1], (vl));			\
+  (p_) = vms_s;								\
+} while (0)
+
+/* The same step where the constant is PROVABLY the larger operand, so the
+   sum residual is the 3-op Fast2Sum one rather than Knuth's 5-op form.
+   For |v| <= 0.5 the running value is |p| <= 0.5255 (|c2| plus |u2|) at
+   k = 1 and |p| <= max|P3| = 0.0866 at k = 2, so |p*v| <= 0.263 and
+   0.044 against |c1| = 0.643 and |c2| = 0.482: the ordering holds by a
+   factor of 2.4 and 11.  (k = 0 cannot use it: |p*v| reaches 0.36 there
+   against |c0| = 0.289.)  */
+#define VM_ERFC_MID_STEP_F2(p_, l_, k, v, vl) do {			\
+  vm_f_t vmf_u = VM_VFMUL_VV ((p_), (v), (vl));				\
+  vm_f_t vmf_s = VM_VFADD_VF (vmf_u, vm_erfc_mid[k][0], (vl));		\
+  vm_f_t vmf_en = VM_VFNMSAC_VV (vmf_u, (p_), (v), (vl));		\
+  vm_f_t vmf_t = VM_VFADD_VV (						\
+    VM_VFRSUB_VF (vmf_s, vm_erfc_mid[k][0], (vl)), vmf_u, (vl));	\
+  vmf_t = VM_VFMACC_VV (vmf_t, (l_), (v), (vl));			\
+  vmf_t = VM_VFSUB_VV (vmf_t, vmf_en, (vl));				\
+  (l_) = VM_VFADD_VF (vmf_t, vm_erfc_mid[k][1], (vl));			\
+  (p_) = vmf_s;								\
+} while (0)
+
 #define VM_ERFC_MID_POLY(ph, pl, v, vl) do {				\
-  int vemi;								\
-  /* Degrees 19..7 in Estrin form: this block's rounding error is scaled\
-     by v^7 < 2^-7 before it reaches the result, so reassociating it is\
-     accuracy-free, and it takes six dependent fmas off the chain this\
-     band is bound by (13 -> 5 levels).  */\
-  vm_f_t vemi_v2 = VM_VFMUL_VV ((v), (v), (vl));\
-  vm_f_t vemi_v4 = VM_VFMUL_VV (vemi_v2, vemi_v2, (vl));\
-  vm_f_t vemi_a0 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[7][0], (vl)),\
-				 vm_erfc_mid[8][0], (v), (vl));\
-  vm_f_t vemi_a1 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[9][0], (vl)),\
-				 vm_erfc_mid[10][0], (v), (vl));\
-  vm_f_t vemi_a2 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[11][0], (vl)),\
-				 vm_erfc_mid[12][0], (v), (vl));\
-  vm_f_t vemi_a3 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[13][0], (vl)),\
-				 vm_erfc_mid[14][0], (v), (vl));\
-  vm_f_t vemi_a4 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[15][0], (vl)),\
-				 vm_erfc_mid[16][0], (v), (vl));\
-  vm_f_t vemi_a5 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[17][0], (vl)),\
-				 vm_erfc_mid[18][0], (v), (vl));\
-  vm_f_t vemi_b0 = VM_VFMACC_VV (vemi_a0, vemi_a1, vemi_v2, (vl));\
-  vm_f_t vemi_b1 = VM_VFMACC_VV (vemi_a2, vemi_a3, vemi_v2, (vl));\
-  vm_f_t vemi_b2 = VM_VFMACC_VV (vemi_a4, vemi_a5, vemi_v2, (vl));\
-  vm_f_t vemi_c0 = VM_VFMACC_VF (vemi_b2, vm_erfc_mid[19][0], vemi_v4, (vl));\
-  vm_f_t vemi_c1 = VM_VFMACC_VV (vemi_b1, vemi_c0, vemi_v4, (vl));\
-  (ph) = VM_VFMACC_VV (vemi_b0, vemi_c1, vemi_v4, (vl));\
+  vm_f_t vmi_v2 = VM_VFMUL_VV ((v), (v), (vl));				\
+  vm_f_t vmi_v4 = VM_VFMUL_VV (vmi_v2, vmi_v2, (vl));			\
+  vm_f_t vmi_v8 = VM_VFMUL_VV (vmi_v4, vmi_v4, (vl));			\
+  vm_f_t vmi_v16 = VM_VFMUL_VV (vmi_v8, vmi_v8, (vl));			\
+  /* degrees 3..18 paired as a_j = c_{3+2j} + c_{4+2j} v */		\
+  vm_f_t vmi_a0 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[3][0], (vl)),	\
+				 vm_erfc_mid[4][0], (v), (vl));		\
+  vm_f_t vmi_a1 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[5][0], (vl)),	\
+				 vm_erfc_mid[6][0], (v), (vl));		\
+  vm_f_t vmi_a2 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[7][0], (vl)),	\
+				 vm_erfc_mid[8][0], (v), (vl));		\
+  vm_f_t vmi_a3 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[9][0], (vl)),	\
+				 vm_erfc_mid[10][0], (v), (vl));	\
+  vm_f_t vmi_a4 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[11][0], (vl)),	\
+				 vm_erfc_mid[12][0], (v), (vl));	\
+  vm_f_t vmi_a5 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[13][0], (vl)),	\
+				 vm_erfc_mid[14][0], (v), (vl));	\
+  vm_f_t vmi_a6 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[15][0], (vl)),	\
+				 vm_erfc_mid[16][0], (v), (vl));	\
+  vm_f_t vmi_a7 = VM_VFMACC_VF (VM_VFMV_V_F (vm_erfc_mid[17][0], (vl)),	\
+				 vm_erfc_mid[18][0], (v), (vl));	\
+  vm_f_t vmi_b0 = VM_VFMACC_VV (vmi_a0, vmi_a1, vmi_v2, (vl));		\
+  vm_f_t vmi_b1 = VM_VFMACC_VV (vmi_a2, vmi_a3, vmi_v2, (vl));		\
+  vm_f_t vmi_b2 = VM_VFMACC_VV (vmi_a4, vmi_a5, vmi_v2, (vl));		\
+  vm_f_t vmi_b3 = VM_VFMACC_VV (vmi_a6, vmi_a7, vmi_v2, (vl));		\
+  vm_f_t vmi_c0 = VM_VFMACC_VV (vmi_b0, vmi_b1, vmi_v4, (vl));		\
+  vm_f_t vmi_c1 = VM_VFMACC_VV (vmi_b2, vmi_b3, vmi_v4, (vl));		\
+  vm_f_t vmi_d0 = VM_VFMACC_VV (vmi_c0, vmi_c1, vmi_v8, (vl));		\
+  (ph) = VM_VFMACC_VF (vmi_d0, vm_erfc_mid[19][0], vmi_v16, (vl));	\
   (pl) = VM_VFMV_V_F (0.0, (vl));					\
-  _Pragma ("GCC unroll 32")						\
-  for (vemi = 6; vemi >= 0; vemi--)					\
-    {									\
-      vm_f_t vemi_u, vemi_e, vemi_s, vemi_t;				\
-      VM_TWO_PROD (vemi_u, vemi_e, (ph), (v), (vl));			\
-      vemi_e = VM_VFMACC_VV (vemi_e, (pl), (v), (vl));			\
-      VM_TWO_SUM (vemi_s, vemi_t, vemi_u,				\
-		  VM_VFMV_V_F (vm_erfc_mid[vemi][0], (vl)), (vl));	\
-      vemi_t = VM_VFADD_VV (vemi_t, vemi_e, (vl));			\
-      vemi_t = VM_VFADD_VF (vemi_t, vm_erfc_mid[vemi][1], (vl));	\
-      VM_FAST2SUM ((ph), (pl), vemi_s, vemi_t, (vl));			\
-    }									\
+  VM_ERFC_MID_STEP_F2 ((ph), (pl), 2, (v), (vl));			\
+  VM_ERFC_MID_STEP_F2 ((ph), (pl), 1, (v), (vl));			\
+  VM_ERFC_MID_STEP ((ph), (pl), 0, (v), (vl));				\
 } while (0)
 
 /* The 1.25 <= |x| erfc tail: exp(-x^2 - 0.5625 + rho(1/x^2))/x in dd,
@@ -508,8 +546,10 @@ VM_KFN (erfc_mid) (vm_f_t x, size_t vl)
   VM_ERFC_MID_POLY (ph, pl, v, (vl));
   /* x < 0: erfc(x) = 2 - erfc(|x|), in dd, one rounding at the end.  */
   vm_b_t mneg = VM_VMSGEU_VX (VM_BITS (x), VM_ERF_BSIGN, (vl));
-  vm_f_t nh, nl;
-  VM_TWO_SUM (nh, nl, VM_VFMV_V_F (2.0, (vl)), VM_VFNEG_V (ph, (vl)), (vl));
+  /* 2 - ph with |2| >= |ph| by construction (the band is [0.077, 0.724]),
+     so the sum residual is the 3-op Fast2Sum one, not Knuth's 5 op.  */
+  vm_f_t nh = VM_VFRSUB_VF (ph, 2.0, (vl));
+  vm_f_t nl = VM_VFSUB_VV (VM_VFRSUB_VF (nh, 2.0, (vl)), ph, (vl));
   nl = VM_VFSUB_VV (nl, pl, (vl));
   ph = VM_VFMERGE_VVM (ph, nh, mneg, (vl));
   pl = VM_VFMERGE_VVM (pl, nl, mneg, (vl));
