@@ -288,19 +288,24 @@ baseline is much stronger. Measured mean is 3.12x with every entry above
 scalar when built natively with GCC 14.2
 (`test/results/board-a210/bench-a210-gcc14.md`).
 
-The result is also sensitive to the compiler: an earlier revision of this
-tree built with GCC 15.1 averaged 2.26x with 14 entries under parity on
-that board but won others back (e.g. `atan2` 0.30x -> 1.03x), i.e.
-per-entry code generation for RVV still moves by 2-3x between GCC 14 and
-15 on this core.  A call between RVV intrinsics inside the strip loop is
-the worst of those patterns (GCC PR 121018): it made `sinf` 2.16x ->
-0.55x on this board while being a win with GCC 15, which is why the
-binary32 trig fallbacks are kept inlined.
-Every one of the 82 entries is above scalar there too, but the
-margins are thin: `lgamma_r` 1.05x, `lgamma` 1.07x, `atan2pif` 1.07x and
-`powf` 1.08x are the ones a compiler or board change would put back
-under parity first.  The per-entry report is
-`test/results/board-a210/bench-a210-gcc14.md`.
+The result is also sensitive to the compiler.  That same tree cross-built
+with GCC 15.1 instead of the board's native GCC 14.2 measures mean 2.48x
+with four entries under parity (`hypot` 0.67x, `lgamma` 0.72x,
+`lgamma_r` 0.88x, `acospif` 0.95x), so per-entry RVV code generation still
+moves by up to 2x between the two compilers on this core; the numbers
+above and in `test/results/board-a210/` are for the board's native
+compiler, which is also what ships.  What that sensitivity means for the
+source: a call between RVV intrinsics inside the strip loop is the worst
+of the patterns (GCC PR 121018 - it made `sinf` 2.16x -> 0.55x on this
+board while being a win with GCC 15), explicit rounding-mode conversions
+cost an `fsrmi`/`fsrm` pair per strip (the reason `lgamma_r`'s sign
+output is derived from its sign bit), and any `vsetvli` type change in
+the loop is a real instruction.  The binary32 trig fallbacks therefore
+stay inlined and the fast paths stay in one SEW/LMUL shape.
+
+The full 100057-record MPFR gate also passes on this board, not just the
+SMALL tier: `test/results/board-a210/acc-a210-full.md` (82/82 PASS, no
+class/sweep/flag failures).
 
 ## VFABI aliases
 
