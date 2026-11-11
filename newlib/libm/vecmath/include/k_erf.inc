@@ -15,10 +15,16 @@
                                                     whose answer is normal)
      |x| < 0.84375        x + x*P(x^2)/Q(x^2)      (fdlibm s_erf.c)
      |x| < 1.25           sign(x) * (erx + P1/Q1)  (fdlibm)
-     |x| < 6              1 - exp(-z^2-0.5625+d2+rho(1/x^2))/x  with z = x
-                          truncated to 21 bits (z*z exact) and one exp;
-                          rho is the SAME one-range rational erfc's tail
-                          uses (its range contains this band's)
+     |x| < 6              1 - exp(-x^2-0.5625+rho(1/x^2))/x, one exp and
+                          one fma for the exponent (no fdlibm z/d2 split:
+                          erf's budget on the exponent is q(x)-graded and
+                          x^2 = 1.5625 is exact at the band edge anyway);
+                          rho is an ERF-ONLY 7/7 rational fitted over this
+                          band's own 1/x^2 range, weighted by q so the
+                          accuracy lands where erf can see it (erfc's tail
+                          keeps its 10/10 over the whole 533:1 range: the
+                          two entries have different budgets and the erf
+                          entry's register pressure is the tighter one)
      |x| >= 6             sign(x)                  (rounds to 1)
      NaN/Inf              sign(x) + 1/x            (fdlibm: qNaN quiet,
                                                     sNaN invalid via 1/x,
@@ -154,6 +160,36 @@ static const double vm_erfc_rho_q[11] = {
   1.13231359553771043e+02,
 };
 
+/* erf-ONLY tail factor: the same rho, but fitted over the erf tail's
+   own band 1.25 <= |x| < 6 (s = 1/x^2 in [1/36, 0.64], a 23:1 range
+   against erfc's 533:1) as a 7/7 rational.  This is the erf path's own
+   band and only the erf path pays for it: 16 coefficients against the
+   shared 10/10's 22, 14 fmas against 20, and a 3-deep Estrin chain
+   against 4.
+
+   The fit is not the same L2/relative fit the erfc table uses, because
+   this band has to protect a different quantity: d(erf) = -q*d(rho)
+   with q = erfc(x), so |d(rho)| may be 7.2e-16 at x = 1.25 (0.5 ulp of
+   erf) but 5.5e-4 at x = 6 -- twelve orders of slack an unweighted fit
+   cannot spend.  This table is a Gauss-Newton / Lawson-reweighted
+   minimax of exactly q*|d(rho)| in the s power basis: 0.001 ulp of erf
+   exactly, 0.057 ulp through the double evaluation, against the shared
+   10/10's 0.002 / 0.075 on the same band.  All coefficients are
+   one-signed in this basis (P negative, Q positive), so the evaluation
+   has no cancellation, and Q's roots stay well off the band.  */
+static const double vm_erf_rho_p[8] = {
+  -9.86494625389206653e-03, -6.71908390513214049e-01,
+  -9.13177725801552320e+00, -4.63172461245990306e+01,
+  -9.89525998057793998e+01, -8.66632796042627405e+01,
+  -2.65703485422857391e+01, -1.81775698261740870e+00,
+};
+static const double vm_erf_rho_q[8] = {
+  1.00000000000000000e+00, 1.74262205158238110e+01,
+  1.05794374692620792e+02, 2.80801820452913887e+02,
+  3.36230211703642624e+02, 1.69337771095156484e+02,
+  2.93075018024820366e+01, 9.92372934609575319e-01,
+};
+
 /* Horner over an 11-coefficient polynomial in Estrin form (4 dependent fmas
    instead of 10).  The rho rational is the widest chain left in the
    tail and the tail is latency-bound at 8 lanes.  */
@@ -186,6 +222,33 @@ static const double vm_erfc_rho_q[11] = {
   VM_ERFC_HOR11 (verh_p, vm_erfc_rho_p, (s_), (vl));			\
   VM_ERFC_HOR11 (verh_q, vm_erfc_rho_q, (s_), (vl));			\
   VM_QDIV ((rho), verh_p, verh_q, (vl));				\
+} while (0)
+
+/* The same 8-coefficient polynomial, 3-level Estrin form: pairs, then
+   one combine with s^2 and one with s^4 (no s^8 term to carry).  */
+#define VM_ERF_HOR8(r, tbl, x, vl) do {					\
+  vm_f_t vefh_x2 = VM_VFMUL_VV ((x), (x), (vl));			\
+  vm_f_t vefh_x4 = VM_VFMUL_VV (vefh_x2, vefh_x2, (vl));		\
+  vm_f_t vefh_a0 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[0], (vl)),		\
+				 (tbl)[1], (x), (vl));				\
+  vm_f_t vefh_a1 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[2], (vl)),		\
+				 (tbl)[3], (x), (vl));				\
+  vm_f_t vefh_a2 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[4], (vl)),		\
+				 (tbl)[5], (x), (vl));				\
+  vm_f_t vefh_a3 = VM_VFMACC_VF (VM_VFMV_V_F ((tbl)[6], (vl)),		\
+				 (tbl)[7], (x), (vl));				\
+  vm_f_t vefh_b0 = VM_VFMACC_VV (vefh_a0, vefh_a1, vefh_x2, (vl));	\
+  vm_f_t vefh_b1 = VM_VFMACC_VV (vefh_a2, vefh_a3, vefh_x2, (vl));	\
+  (r) = VM_VFMACC_VV (vefh_b0, vefh_b1, vefh_x4, (vl));			\
+} while (0)
+
+/* rho for the ERF tail only (see vm_erf_rho_p): 7/7 over the erf band,
+   same quotient construction as erfc's.  */
+#define VM_ERF_RHO(rho, s_, vl) do {					\
+  vm_f_t verfh_p, verfh_q;						\
+  VM_ERF_HOR8 (verfh_p, vm_erf_rho_p, (s_), (vl));			\
+  VM_ERF_HOR8 (verfh_q, vm_erf_rho_q, (s_), (vl));			\
+  VM_QDIV ((rho), verfh_p, verfh_q, (vl));				\
 } while (0)
 
 /* erf/erfc magnitudes as raw bits (integer compares: NaN-safe).  */
@@ -323,24 +386,25 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
   if (VM_VFIRST_M (VM_VMAND_MM (me_tail, VM_VMNOT_M (me_erx, (vl)), (vl)),
 		   (vl)) >= 0)
     {
-      vm_b_t me_tail2 = me_tailb;
-      vm_f_t vet_xt = VM_VFMERGE_VVM (vone, vax, me_tail2, (vl));
-      vm_f_t vet_z = VM_FROM_BITS (VM_VAND_VX (VM_BITS (vet_xt),
-					       VM_HIGHWORD_U64, (vl)));
-      vm_f_t vet_z2 = VM_VFMUL_VV (vet_z, vet_z, (vl));	/* exact */
-      vm_f_t vet_T = VM_VFSUB_VF (VM_VFNEG_V (vet_z2, (vl)), 0.5625, (vl));
-      vm_f_t vet_d2 = VM_VFMUL_VV (VM_VFSUB_VV (vet_z, vet_xt, (vl)),
-				   VM_VFADD_VV (vet_z, vet_xt, (vl)), (vl));
+      vm_f_t vet_xt = VM_VFMERGE_VVM (vone, vax, me_tailb, (vl));
+      /* -x^2 - 0.5625 in one fma.  fdlibm's z (x with the low word
+	 cleared) + d2 correction exists because ERFC needs the exponent to
+	 1e-17 relative even at x = 26; erf does not: d(erf) = -q*dS and q
+	 = erfc(x) collapses faster than x^2 grows, so the budget on dS
+	 runs from 9e-15 at x = 1.25 (where x^2 = 1.5625 is exact anyway)
+	 to 5.5e-7 at x = 6.  One fma's 0.5 ulp of x^2+0.5625 is 2 orders
+	 inside that, and it buys 6 vector ops per strip.  */
+      vm_f_t vet_T = VM_VFNMSAC_VV (VM_VFMV_V_F (-0.5625, (vl)),
+				    vet_xt, vet_xt, (vl));
       vm_f_t vet_s = VM_VFMUL_VV (vet_rt, vet_rt, (vl));
-      /* The one-range rho rational (VM_ERFC_RHO) covers 1/x^2 in
-	 [0.0012, 0.64], which contains this band's [0.0278, 0.64], and it
-	 is an order of magnitude more accurate than the erf tail needs
-	 (erf = 1 - q makes the budget 1e-15 relative on q, not 1e-17).
-	 It costs 22 fmas against fdlibm's 30 and needs no range mask.  */
+      /* The erf-ONLY rho (VM_ERF_RHO): the same factor as erfc's tail,
+	 fitted over this band's own 1/x^2 range [0.0278, 0.64] and
+	 weighted by the erf result's own sensitivity (see vm_erf_rho_p).
+	 14 fmas and 16 coefficients against the shared 10/10's 20 and 22,
+	 in a 3-deep chain instead of 4 -- the largest block left here.  */
       vm_f_t vet_rho;
-      VM_ERFC_RHO (vet_rho, vet_s, (vl));
-      vm_f_t vet_S = VM_VFADD_VV (vet_T, VM_VFADD_VV (vet_d2, vet_rho, (vl)),
-				  (vl));
+      VM_ERF_RHO (vet_rho, vet_s, (vl));
+      vm_f_t vet_S = VM_VFADD_VV (vet_T, vet_rho, (vl));
       vm_f_t vet_scale, vet_tmp;
       VM_EXP_MAIN (vet_scale, vet_tmp, vet_S, (vl));
       vm_f_t vet_et = VM_VFMACC_VV (vet_scale, vet_scale, vet_tmp, (vl));
