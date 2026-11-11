@@ -135,58 +135,58 @@ hardware (SpaceMiT X60, VLEN 256, 8x1.6 GHz) and under qemu:
 Every one of the 82 entries is within 1 ulp (no lane over 1 ulp, no
 special-class failure, no per-lane flag failure, sweep-stable across
 strip lengths, and identical at every VLEN), and all 82 are faster than
-the scalar baseline. The mean speedup is 3.44x; the slowest entry is
-`lgamma` at 1.26x and the fastest `tgammaf` at 7.30x.
+the scalar baseline. The mean speedup is 3.47x; the slowest entry is
+`acospif` at 1.45x and the fastest `tgammaf` at 7.28x.
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrt | 0.5000 | 4.45x | asin | 0.6383 | 1.69x |
+| sqrt | 0.5000 | 4.44x | asin | 0.6383 | 1.69x |
 | rsqrt | 0.8612 | 2.96x | acos | 0.6409 | 1.77x |
-| cbrt | 0.6645 | 3.54x | atan | 0.9181 | 2.85x |
-| exp | 0.5030 | 3.77x | atan2 | 0.9054 | 4.72x |
-| exp2 | 0.5038 | 3.48x | asinpi | 1.0000 | 1.51x |
-| exp10 | 0.5034 | 3.96x | acospi | 0.6624 | 1.58x |
-| expm1 | 0.8130 | 3.61x | atanpi | 1.0000 | 3.13x |
-| log | 0.7290 | 2.24x | atan2pi | 1.0000 | 6.51x |
-| log2 | 0.6132 | 3.03x | sinh | 0.6446 | 4.59x |
-| log10 | 0.9091 | 2.79x | cosh | 0.5645 | 3.26x |
-| log1p | 0.5890 | 2.62x | tanh | 0.5230 | 3.90x |
+| cbrt | 0.6645 | 3.54x | atan | 0.9181 | 2.86x |
+| exp | 0.5030 | 3.98x | atan2 | 0.9054 | 4.72x |
+| exp2 | 0.5038 | 3.72x | asinpi | 1.0000 | 1.51x |
+| exp10 | 0.5034 | 3.74x | acospi | 0.6624 | 1.57x |
+| expm1 | 0.8130 | 3.58x | atanpi | 1.0000 | 3.14x |
+| log | 0.7290 | 2.24x | atan2pi | 1.0000 | 6.55x |
+| log2 | 0.6132 | 3.03x | sinh | 0.6446 | 4.58x |
+| log10 | 0.9091 | 2.79x | cosh | 0.5645 | 3.27x |
+| log1p | 0.5890 | 2.63x | tanh | 0.5230 | 3.89x |
 | log2p1 | 1.0000 | 2.12x | asinh | 0.9076 | 2.07x |
 | pow | 0.5053 | 3.42x | acosh | 0.9352 | 1.82x |
-| sin | 0.7852 | 2.69x | atanh | 0.9885 | 3.17x |
-| cos | 0.7846 | 2.52x | hypot | 0.5000 | 2.40x |
-| tan | 0.7376 | 2.32x | erf | 1.0000 | 1.76x |
-| sincos | 0.8345 | 3.97x | erfc | 0.7976 | 1.95x |
-| sinpi | 1.0000 | 2.70x | tgamma | 1.0000 | 2.84x |
-| cospi | 0.8067 | 2.49x | lgamma | 0.8505 | 1.26x |
-| tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.37x |
-| sincospi | 1.0000 | 3.77x |  | |  |
+| sin | 0.7852 | 2.69x | atanh | 0.9885 | 3.18x |
+| cos | 0.7846 | 2.52x | hypot | 0.5000 | 2.39x |
+| tan | 0.7376 | 2.33x | erf | 1.0000 | 1.76x |
+| sincos | 0.8345 | 3.61x | erfc | 0.7976 | 1.94x |
+| sinpi | 1.0000 | 2.70x | tgamma | 1.0000 | 3.17x |
+| cospi | 0.8067 | 2.51x | lgamma | 0.8505 | 1.46x |
+| tanpi | 1.0000 | 2.66x | lgamma_r | 0.5619 | 1.47x |
+| sincospi | 1.0000 | 3.71x |  | |  |
 
 The binary32 entries:
 
 | function | max ulp | speedup | | function | max ulp | speedup |
 |---|---|---|---|---|---|---|
-| sqrtf | 0.5000 | 7.02x | asinf | 0.8136 | 3.33x |
-| rsqrtf | 0.5000 | 2.16x | acosf | 0.8893 | 4.32x |
-| cbrtf | 0.5239 | 5.80x | atanf | 0.8238 | 4.63x |
-| expf | 0.5257 | 6.28x | atan2f | 0.7150 | 4.35x |
-| exp2f | 0.5000 | 3.44x | asinpif | 0.8055 | 3.46x |
-| exp10f | 0.5000 | 3.48x | acospif | 0.5000 | 1.46x |
-| expm1f | 0.6321 | 4.81x | atanpif | 0.8251 | 4.89x |
-| logf | 0.5106 | 2.88x | atan2pif | 0.5000 | 2.03x |
+| sqrtf | 0.5000 | 7.09x | asinf | 0.8136 | 3.34x |
+| rsqrtf | 0.5000 | 2.15x | acosf | 0.8893 | 4.29x |
+| cbrtf | 0.5239 | 5.79x | atanf | 0.8238 | 4.63x |
+| expf | 0.5257 | 6.24x | atan2f | 0.7150 | 4.36x |
+| exp2f | 0.5000 | 3.46x | asinpif | 0.8055 | 3.48x |
+| exp10f | 0.5000 | 3.51x | acospif | 0.5000 | 1.45x |
+| expm1f | 0.6321 | 4.78x | atanpif | 0.8251 | 4.89x |
+| logf | 0.5106 | 2.89x | atan2pif | 0.8029 | 3.34x |
 | log2f | 0.5340 | 2.80x | sinhf | 0.6741 | 5.80x |
-| log10f | 0.5279 | 5.43x | coshf | 0.5365 | 6.36x |
-| log1pf | 0.5796 | 3.39x | tanhf | 0.6855 | 3.20x |
-| log2p1f | 0.5523 | 2.28x | asinhf | 0.5238 | 2.84x |
-| powf | 0.5000 | 2.30x | acoshf | 0.5055 | 3.80x |
-| sinf | 0.5812 | 3.07x | atanhf | 0.5362 | 4.45x |
-| cosf | 0.5812 | 3.08x | hypotf | 0.5000 | 4.10x |
-| tanf | 0.6537 | 3.66x | erff | 0.5005 | 1.53x |
-| sincosf | 0.5916 | 4.29x | erfcf | 0.5312 | 2.26x |
-| sinpif | 0.6053 | 3.92x | tgammaf | 0.5002 | 7.30x |
-| cospif | 0.6396 | 3.77x | lgammaf | 0.5011 | 5.49x |
-| tanpif | 0.6965 | 3.94x | lgamma_rf | 0.5011 | 4.37x |
-| sincospif | 0.6040 | 4.87x |  | |  |
+| log10f | 0.5279 | 5.42x | coshf | 0.5365 | 6.35x |
+| log1pf | 0.5796 | 3.32x | tanhf | 0.6855 | 3.26x |
+| log2p1f | 0.5523 | 2.26x | asinhf | 0.5238 | 2.84x |
+| powf | 0.5000 | 2.28x | acoshf | 0.5055 | 3.80x |
+| sinf | 0.6274 | 4.09x | atanhf | 0.5362 | 4.44x |
+| cosf | 0.5812 | 3.07x | hypotf | 0.5000 | 4.10x |
+| tanf | 0.6537 | 3.66x | erff | 0.5005 | 1.54x |
+| sincosf | 0.5916 | 4.25x | erfcf | 0.5312 | 2.26x |
+| sinpif | 0.6053 | 3.90x | tgammaf | 0.5002 | 7.28x |
+| cospif | 0.6396 | 3.76x | lgammaf | 0.5011 | 5.49x |
+| tanpif | 0.6965 | 3.95x | lgamma_rf | 0.5011 | 4.30x |
+| sincospif | 0.6040 | 4.86x |  | |  |
 
 Starred entries reach exactly 1.0 ulp, which the contract admits: they
 round twice, once at 53-bit precision in a scaled domain and then onto
@@ -284,7 +284,7 @@ failures -- same contract as the VLEN 256 board. Per-run reports are in
 The speedups are structurally smaller there, for two reasons: the vector
 unit is half as wide (VLEN 128, so a strip covers half as many lanes)
 while its scalar FPU is roughly twice as fast per element, so the scalar
-baseline is much stronger. Measured mean is 3.12x with every entry above
+baseline is much stronger. Measured mean is 3.10x with every entry above
 scalar when built natively with GCC 14.2
 (`test/results/board-a210/bench-a210-gcc14.md`).
 
