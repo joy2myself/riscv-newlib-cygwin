@@ -344,7 +344,7 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
       vm_f_t vet_scale, vet_tmp;
       VM_EXP_MAIN (vet_scale, vet_tmp, vet_S, (vl));
       vm_f_t vet_et = VM_VFMACC_VV (vet_scale, vet_scale, vet_tmp, (vl));
-      vet_tv = VM_VFRSUB_VF (VM_VFMUL_VV (vet_et, vet_rt, (vl)), 1.0, (vl));
+      vet_tv = VM_VFNMSAC_VV (vone, vet_et, vet_rt, (vl));	/* 1 - et/x */
       vet_tv = VM_VFSGNJ_VV (vet_tv, x, (vl));
     }
 
@@ -415,6 +415,25 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
   (p_) = vms_s;								\
 } while (0)
 
+/* The same step where the constant is PROVABLY the larger operand, so the
+   sum residual is the 3-op Fast2Sum one rather than Knuth's 5-op form.
+   For |v| <= 0.5 the running value is |p| <= 0.5255 (|c2| plus |u2|) at
+   k = 1 and |p| <= max|P3| = 0.0866 at k = 2, so |p*v| <= 0.263 and
+   0.044 against |c1| = 0.643 and |c2| = 0.482: the ordering holds by a
+   factor of 2.4 and 11.  (k = 0 cannot use it: |p*v| reaches 0.36 there
+   against |c0| = 0.289.)  */
+#define VM_ERFC_MID_STEP_F2(p_, l_, k, v, vl) do {			\
+  vm_f_t vmf_u = VM_VFMUL_VV ((p_), (v), (vl));				\
+  vm_f_t vmf_s = VM_VFADD_VF (vmf_u, vm_erfc_mid[k][0], (vl));		\
+  vm_f_t vmf_en = VM_VFNMSAC_VV (vmf_u, (p_), (v), (vl));		\
+  vm_f_t vmf_t = VM_VFADD_VV (						\
+    VM_VFRSUB_VF (vmf_s, vm_erfc_mid[k][0], (vl)), vmf_u, (vl));	\
+  vmf_t = VM_VFMACC_VV (vmf_t, (l_), (v), (vl));			\
+  vmf_t = VM_VFSUB_VV (vmf_t, vmf_en, (vl));				\
+  (l_) = VM_VFADD_VF (vmf_t, vm_erfc_mid[k][1], (vl));			\
+  (p_) = vmf_s;								\
+} while (0)
+
 #define VM_ERFC_MID_POLY(ph, pl, v, vl) do {				\
   vm_f_t vmi_v2 = VM_VFMUL_VV ((v), (v), (vl));				\
   vm_f_t vmi_v4 = VM_VFMUL_VV (vmi_v2, vmi_v2, (vl));			\
@@ -446,8 +465,8 @@ VM_KFN (erf) (vm_f_t x, size_t vl)
   vm_f_t vmi_d0 = VM_VFMACC_VV (vmi_c0, vmi_c1, vmi_v8, (vl));		\
   (ph) = VM_VFMACC_VF (vmi_d0, vm_erfc_mid[19][0], vmi_v16, (vl));	\
   (pl) = VM_VFMV_V_F (0.0, (vl));					\
-  VM_ERFC_MID_STEP ((ph), (pl), 2, (v), (vl));				\
-  VM_ERFC_MID_STEP ((ph), (pl), 1, (v), (vl));				\
+  VM_ERFC_MID_STEP_F2 ((ph), (pl), 2, (v), (vl));			\
+  VM_ERFC_MID_STEP_F2 ((ph), (pl), 1, (v), (vl));			\
   VM_ERFC_MID_STEP ((ph), (pl), 0, (v), (vl));				\
 } while (0)
 
@@ -527,8 +546,10 @@ VM_KFN (erfc_mid) (vm_f_t x, size_t vl)
   VM_ERFC_MID_POLY (ph, pl, v, (vl));
   /* x < 0: erfc(x) = 2 - erfc(|x|), in dd, one rounding at the end.  */
   vm_b_t mneg = VM_VMSGEU_VX (VM_BITS (x), VM_ERF_BSIGN, (vl));
-  vm_f_t nh, nl;
-  VM_TWO_SUM (nh, nl, VM_VFMV_V_F (2.0, (vl)), VM_VFNEG_V (ph, (vl)), (vl));
+  /* 2 - ph with |2| >= |ph| by construction (the band is [0.077, 0.724]),
+     so the sum residual is the 3-op Fast2Sum one, not Knuth's 5 op.  */
+  vm_f_t nh = VM_VFRSUB_VF (ph, 2.0, (vl));
+  vm_f_t nl = VM_VFSUB_VV (VM_VFRSUB_VF (nh, 2.0, (vl)), ph, (vl));
   nl = VM_VFSUB_VV (nl, pl, (vl));
   ph = VM_VFMERGE_VVM (ph, nh, mneg, (vl));
   pl = VM_VFMERGE_VVM (pl, nl, mneg, (vl));
