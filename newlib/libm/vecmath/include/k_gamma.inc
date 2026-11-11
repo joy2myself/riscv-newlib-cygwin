@@ -855,23 +855,37 @@ static const double vm_gam_r[6] = {
   vm_f_t vgl_uc = VM_VFMUL_VV (vgl_e, vgl_rc, (vl));			\
   vm_f_t vgl_q2 = VM_VFMUL_VV (vgl_q, vgl_q, (vl));			\
   /* C = 2(q^3/3 + q^5/5 + ... + q^23/23), |q| <= 0.1716 */		\
-  vm_f_t vgl_c = VM_VFMV_V_F (1.0 / 23.0, (vl));			\
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 21.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 19.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 17.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 15.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 13.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 11.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 9.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 7.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 5.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMACC_VV (VM_VFMV_V_F (1.0 / 3.0, (vl)), vgl_c, vgl_q2, (vl)); \
-  vgl_c = VM_VFMUL_VF (VM_VFMUL_VV (VM_VFMUL_VV (vgl_q2, vgl_q, (vl)),	\
-				    vgl_c, (vl)), 2.0, (vl));		\
+  /* Estrin over q2: five fma levels instead of ten, and the scalar	\
+     multiplier removes five vfmv broadcasts.  */			\
+  vm_f_t vgl_c0 = VM_VFMACC_VF (VM_VFMV_V_F (1.0 / 3.0, (vl)),		\
+				1.0 / 5.0, vgl_q2, (vl));		\
+  vm_f_t vgl_c1 = VM_VFMACC_VF (VM_VFMV_V_F (1.0 / 7.0, (vl)),		\
+				1.0 / 9.0, vgl_q2, (vl));		\
+  vm_f_t vgl_c2 = VM_VFMACC_VF (VM_VFMV_V_F (1.0 / 11.0, (vl)),		\
+				1.0 / 13.0, vgl_q2, (vl));		\
+  vm_f_t vgl_c3 = VM_VFMACC_VF (VM_VFMV_V_F (1.0 / 15.0, (vl)),		\
+				1.0 / 17.0, vgl_q2, (vl));		\
+  vm_f_t vgl_c4 = VM_VFMACC_VF (VM_VFMV_V_F (1.0 / 19.0, (vl)),		\
+				1.0 / 21.0, vgl_q2, (vl));		\
+  vm_f_t vgl_c5 = VM_VFMV_V_F (1.0 / 23.0, (vl));			\
+  vm_f_t vgl_c;								\
+  vm_f_t vgl_q4 = VM_VFMUL_VV (vgl_q2, vgl_q2, (vl));			\
+  vgl_c4 = VM_VFMACC_VV (vgl_c4, vgl_c5, vgl_q4, (vl));			\
+  vgl_c3 = VM_VFMACC_VV (vgl_c3, vgl_c4, vgl_q4, (vl));			\
+  vgl_c2 = VM_VFMACC_VV (vgl_c2, vgl_c3, vgl_q4, (vl));			\
+  vgl_c1 = VM_VFMACC_VV (vgl_c1, vgl_c2, vgl_q4, (vl));			\
+  vgl_c0 = VM_VFMACC_VV (vgl_c0, vgl_c1, vgl_q4, (vl));			\
+  vgl_c = vgl_c0;							\
+  /* 2*q**3 folds into the q+q the two_sum below already computes.  */	\
+  vgl_c = VM_VFMUL_VV (VM_VFMUL_VV (vgl_q2,				\
+				    VM_VFADD_VV (vgl_q, vgl_q, (vl)), (vl)), \
+			    vgl_c, (vl));				\
   vm_f_t vgl_h, vgl_se;							\
-  VM_TWO_SUM (vgl_h, vgl_se,						\
-	      VM_VFMUL_VF (vgl_kd, VM_GAM_LN2H, (vl)),			\
-	      VM_VFADD_VV (vgl_q, vgl_q, (vl)), (vl));			\
+  /* kd*ln2hi is exact (21 bits), and |kd*ln2hi| >= 2|q| on every lane,	\
+     so the Fast2Sum residual is exact here.  */			\
+  VM_FAST2SUM (vgl_h, vgl_se,						\
+	       VM_VFMUL_VF (vgl_kd, VM_GAM_LN2H, (vl)),			\
+	       VM_VFADD_VV (vgl_q, vgl_q, (vl)), (vl));			\
   /* t1/(t2+d2) = q - q*d2*rc, and d/dq 2atanh(q) = 2/(1-q^2), so the \
      low word loses 2*q*rc*d2*(1+q^2) when t2 alone is used.  */	\
   vm_f_t vgl_dc = VM_VFMACC_VV (vgl_q, vgl_q, vgl_q2, (vl));		\
@@ -914,13 +928,9 @@ static const double vm_gam_r[6] = {
       VM_VMSGEU_VX (vgf_bx, VM_GAM_B1732, (vl)), (vl)), (vl));	\
   vgf_c1 = VM_VMAND_MM (vgf_lt2, VM_VMNOT_M (	\
     VM_VMOR_MM (vgf_c0, vgf_c2, (vl)), (vl)), (vl));	\
-  /* y for the three <2 cases (1-x / 2-x, x-(tc-1) / x-tc, x / x-1) */	\
-  vm_f_t vgf_y0 = VM_VFMERGE_VVM (VM_VFRSUB_VF (x, 2.0, (vl)),		\
-				  VM_VFRSUB_VF (x, 1.0, (vl)), vgf_lt0898, (vl)); \
-  vm_f_t vgf_y1 = VM_VFMERGE_VVM (VM_VFSUB_VF (x, VM_GAM_TC, (vl)),	\
-				  VM_VFSUB_VF (x, VM_GAM_TC - 1.0, (vl)), vgf_lt0898, (vl)); \
-  vm_f_t vgf_y2 = VM_VFMERGE_VVM (VM_VFSUB_VF (x, 1.0, (vl)), x,	\
-				  vgf_lt0898, (vl));			\
+  /* y for the three <2 cases is built inside the guarded blocks: no	\
+     lane outside a case ever reads it, and the bench domain makes all	\
+     three blocks run on most strips, so the split pays.  */		\
   vm_f_t vgf_p2, vgf_t0, vgf_t1, vgf_t2, vgf_term, vgf_terml;	\
   vm_f_t vgf_t0l, vgf_t1l, vgf_t2l;					\
   vgf_term = VM_VFMV_V_F (0.0, (vl));									\
@@ -930,20 +940,35 @@ static const double vm_gam_r[6] = {
   /* ---- case 0: term = y*p1 + p2 - 0.5y ---- */			\
   if (VM_VFIRST_M (vgf_c0, (vl)) >= 0) \
     { \
+    /* y0 = 1-x below 0.8984, 2-x above; only these lanes read it */	\
+    vm_f_t vgf_y0 = VM_VFMERGE_VVM (VM_VFRSUB_VF (x, 2.0, (vl)),		\
+				    VM_VFRSUB_VF (x, 1.0, (vl)),	\
+				    vgf_lt0898, (vl));			\
     vm_f_t vgf_z0 = VM_VFMUL_VV (vgf_y0, vgf_y0, (vl));			\
-    vm_f_t vgf_p1 = VM_VFMV_V_F (vm_gam_a[10], (vl));			\
-    vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[8], (vl)), vgf_p1, vgf_z0, (vl)); \
-    vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[6], (vl)), vgf_p1, vgf_z0, (vl)); \
-    vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[4], (vl)), vgf_p1, vgf_z0, (vl)); \
-    vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[2], (vl)), vgf_p1, vgf_z0, (vl)); \
-    vgf_p1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[0], (vl)), vgf_p1, vgf_z0, (vl)); \
-    vgf_p2 = VM_VFMV_V_F (vm_gam_a[11], (vl));				\
-    vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[9], (vl)), vgf_p2, vgf_z0, (vl)); \
-    vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[7], (vl)), vgf_p2, vgf_z0, (vl)); \
-    vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[5], (vl)), vgf_p2, vgf_z0, (vl)); \
-    vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[3], (vl)), vgf_p2, vgf_z0, (vl)); \
-    vgf_p2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_a[1], (vl)), vgf_p2, vgf_z0, (vl)); \
-    vgf_p2 = VM_VFMUL_VV (vgf_z0, vgf_p2, (vl));				\
+    /* Estrin in z0: five vfmv broadcasts instead of eleven.  */	\
+    vm_f_t vgf_z02 = VM_VFMUL_VV (vgf_z0, vgf_z0, (vl));		\
+    vm_f_t vgf_p1;							\
+    {									\
+      vm_f_t vgf_a01 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_a[0], (vl)), \
+				     vm_gam_a[2], vgf_z0, (vl));	\
+      vm_f_t vgf_a23 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_a[4], (vl)), \
+				     vm_gam_a[6], vgf_z0, (vl));	\
+      vm_f_t vgf_a45 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_a[8], (vl)), \
+				     vm_gam_a[10], vgf_z0, (vl));	\
+      vgf_a23 = VM_VFMACC_VV (vgf_a23, vgf_a45, vgf_z02, (vl));	\
+      vgf_p1 = VM_VFMACC_VV (vgf_a01, vgf_a23, vgf_z02, (vl));	\
+    }									\
+    {									\
+      vm_f_t vgf_b01 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_a[1], (vl)), \
+				     vm_gam_a[3], vgf_z0, (vl));	\
+      vm_f_t vgf_b23 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_a[5], (vl)), \
+				     vm_gam_a[7], vgf_z0, (vl));	\
+      vm_f_t vgf_b45 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_a[9], (vl)), \
+				     vm_gam_a[11], vgf_z0, (vl));	\
+      vgf_b23 = VM_VFMACC_VV (vgf_b23, vgf_b45, vgf_z02, (vl));	\
+      vgf_p2 = VM_VFMACC_VV (vgf_b01, vgf_b23, vgf_z02, (vl));	\
+      vgf_p2 = VM_VFMUL_VV (vgf_z0, vgf_p2, (vl));			\
+    }									\
     /* -0.5*y0 is exact and |0.5*y0| >= |p2 + y0*p1| on every lane this \
        case owns, so the sum is exact and only the fma above rounds.  */ \
     VM_FAST2SUM (vgf_t0, vgf_t0l, VM_VFMUL_VF (vgf_y0, -0.5, (vl)),	\
@@ -956,24 +981,42 @@ static const double vm_gam_r[6] = {
   if (VM_VFIRST_M (vgf_c1, (vl)) >= 0) \
     { \
     {									\
+      /* y1 = x-(tc-1) below 0.8984, x-tc above */			\
+      vm_f_t vgf_y1 = VM_VFMERGE_VVM (VM_VFSUB_VF (x, VM_GAM_TC, (vl)),	\
+				      VM_VFSUB_VF (x, VM_GAM_TC - 1.0, (vl)), \
+				      vgf_lt0898, (vl));		\
       vm_f_t vgf_z1 = VM_VFMUL_VV (vgf_y1, vgf_y1, (vl));		\
       vm_f_t vgf_yw = VM_VFMUL_VV (vgf_z1, vgf_y1, (vl));		\
-      vm_f_t vgf_q1 = VM_VFMV_V_F (vm_gam_t[12], (vl));			\
-      vm_f_t vgf_q2, vgf_q3, vgf_in;					\
-      vgf_q1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[9], (vl)), vgf_q1, vgf_yw, (vl)); \
-      vgf_q1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[6], (vl)), vgf_q1, vgf_yw, (vl)); \
-      vgf_q1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[3], (vl)), vgf_q1, vgf_yw, (vl)); \
-      vgf_q1 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[0], (vl)), vgf_q1, vgf_yw, (vl)); \
-      vgf_q2 = VM_VFMV_V_F (vm_gam_t[13], (vl));				\
-      vgf_q2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[10], (vl)), vgf_q2, vgf_yw, (vl)); \
-      vgf_q2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[7], (vl)), vgf_q2, vgf_yw, (vl)); \
-      vgf_q2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[4], (vl)), vgf_q2, vgf_yw, (vl)); \
-      vgf_q2 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[1], (vl)), vgf_q2, vgf_yw, (vl)); \
-      vgf_q3 = VM_VFMV_V_F (vm_gam_t[14], (vl));				\
-      vgf_q3 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[11], (vl)), vgf_q3, vgf_yw, (vl)); \
-      vgf_q3 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[8], (vl)), vgf_q3, vgf_yw, (vl)); \
-      vgf_q3 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[5], (vl)), vgf_q3, vgf_yw, (vl)); \
-      vgf_q3 = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_t[2], (vl)), vgf_q3, vgf_yw, (vl)); \
+      vm_f_t vgf_q1, vgf_q2, vgf_q3, vgf_in;				\
+      /* The three quartics in yw, Estrin-paired: 11 vfmv saved.  */	\
+      vm_f_t vgf_yw2 = VM_VFMUL_VV (vgf_yw, vgf_yw, (vl));		\
+      {									\
+	vm_f_t vgf_a0 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_t[0], (vl)), \
+				      vm_gam_t[3], vgf_yw, (vl));	\
+	vm_f_t vgf_a1 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_t[6], (vl)), \
+				      vm_gam_t[9], vgf_yw, (vl));	\
+	vm_f_t vgf_a2 = VM_VFMV_V_F (vm_gam_t[12], (vl));		\
+	vgf_a1 = VM_VFMACC_VV (vgf_a1, vgf_a2, vgf_yw2, (vl));		\
+	vgf_q1 = VM_VFMACC_VV (vgf_a0, vgf_a1, vgf_yw2, (vl));	\
+      }									\
+      {									\
+	vm_f_t vgf_b0 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_t[1], (vl)), \
+				      vm_gam_t[4], vgf_yw, (vl));	\
+	vm_f_t vgf_b1 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_t[7], (vl)), \
+				      vm_gam_t[10], vgf_yw, (vl));	\
+	vm_f_t vgf_b2 = VM_VFMV_V_F (vm_gam_t[13], (vl));		\
+	vgf_b1 = VM_VFMACC_VV (vgf_b1, vgf_b2, vgf_yw2, (vl));		\
+	vgf_q2 = VM_VFMACC_VV (vgf_b0, vgf_b1, vgf_yw2, (vl));		\
+      }									\
+      {									\
+	vm_f_t vgf_c0 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_t[2], (vl)), \
+				      vm_gam_t[5], vgf_yw, (vl));	\
+	vm_f_t vgf_c1 = VM_VFMACC_VF (VM_VFMV_V_F (vm_gam_t[8], (vl)), \
+				      vm_gam_t[11], vgf_yw, (vl));	\
+	vm_f_t vgf_c2 = VM_VFMV_V_F (vm_gam_t[14], (vl));		\
+	vgf_c1 = VM_VFMACC_VV (vgf_c1, vgf_c2, vgf_yw2, (vl));		\
+	vgf_q3 = VM_VFMACC_VV (vgf_c0, vgf_c1, vgf_yw2, (vl));		\
+      }									\
       vgf_in = VM_VFMACC_VV (vgf_q2, vgf_y1, vgf_q3, (vl));		\
       /* term = TF + (z1*q1 - in) with in = TT - yw*inn: the big given \
   	 constant enters once, at the end, so only the small correction \
@@ -992,6 +1035,8 @@ static const double vm_gam_r[6] = {
   if (VM_VFIRST_M (vgf_c2, (vl)) >= 0) \
     { \
     {									\
+      /* c2 is [0.8984,1.2316), where lt0898 is 0, so y2 = x-1 exactly */	\
+      vm_f_t vgf_y2 = VM_VFSUB_VF (x, 1.0, (vl));			\
       vm_f_t vgf_pu = VM_VFMV_V_F (vm_gam_u[5], (vl));			\
       vm_f_t vgf_pv = VM_VFMV_V_F (vm_gam_v[4], (vl));			\
       vgf_pu = VM_VFMACC_VV (VM_VFMV_V_F (vm_gam_u[4], (vl)), vgf_pu, vgf_y2, (vl)); \
@@ -1045,10 +1090,9 @@ static const double vm_gam_r[6] = {
        of 1/pq (7% on pq in [1,3.31], one fma pair, no second divide)
        gives that for a fortieth of a divide.  */			\
     {									\
-      vm_f_t vgf_rq = VM_VFMACC_VF (VM_VFMV_V_F (-0.8778417142970442, (vl)), \
-        0.13954707790799512, vgf_pq, (vl));				\
-      vgf_rq = VM_VFMACC_VV (VM_VFMV_V_F (1.7003775754506978, (vl)),	\
-        vgf_rq, vgf_pq, (vl));						\
+      /* 1/pq needs only a few percent: vfrec7's 7 bits are better than	\
+	 the degree-2 fit it replaces, and cost one instruction.  */	\
+      vm_f_t vgf_rq = VM_VFREC7_V (vgf_pq, (vl));			\
       vgf_t2l = VM_VFMACC_VV (vgf_t2l,					\
         VM_VFNMSAC_VV (vgf_ps, vgf_rt, vgf_pq, (vl)), vgf_rq, (vl));	\
     }									\
@@ -1080,9 +1124,8 @@ static const double vm_gam_r[6] = {
         VM_VMSGT_VX (vgf_i, 3, (vl)), VM_VMSLT_VX (vgf_i, 5, (vl)), (vl)); \
       if (VM_VFIRST_M (vgf_m4, (vl)) >= 0)				\
         {								\
-          /* 1/zp on zp in [6,12) to 7%: a linear fit, no divide.  */	\
-          vm_f_t vgf_rz = VM_VFMACC_VF (VM_VFMV_V_F (0.2391714737574005, (vl)), \
-            -0.013480038173293619, vgf_zp, (vl));			\
+          /* 1/zp to 7 bits is plenty for this 2^-53 correction.  */	\
+          vm_f_t vgf_rz = VM_VFREC7_V (vgf_zp, (vl));			\
           vgf_ll = VM_VFMACC_VV_M (vgf_m4, vgf_ll,			\
             VM_VFMSAC_VV (vgf_zp, vgf_m2, vgf_m3, (vl)), vgf_rz, (vl));	\
         }								\
@@ -1093,7 +1136,16 @@ static const double vm_gam_r[6] = {
       vgf_lh = VM_VFMUL_VV (vgf_lh, vgf_sg, (vl));			\
       vgf_ll = VM_VFMUL_VV (vgf_ll, vgf_sg, (vl));			\
     }									\
-    VM_DD_ADD ((h), (l), vgf_lh, vgf_ll, vgf_term, vgf_terml, (vl));	\
+    /* DD add with the last renormalisation as a Fast2Sum: the low word	\
+       is always below an ulp of the high one, so |s| >= |t| holds and	\
+       the result is bit-identical to VM_DD_ADD.  */			\
+    {									\
+      vm_f_t vgf_s, vgf_e, vgf_t;					\
+      VM_TWO_SUM (vgf_s, vgf_e, vgf_lh, vgf_term, (vl));		\
+      vgf_t = VM_VFADD_VV (VM_VFADD_VV (vgf_ll, vgf_terml, (vl)),	\
+			   vgf_e, (vl));				\
+      VM_FAST2SUM ((h), (l), vgf_s, vgf_t, (vl));			\
+    }									\
   }									\
 } while (0)
 

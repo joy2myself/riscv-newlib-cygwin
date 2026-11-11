@@ -725,10 +725,98 @@ VM32_KFN (acospi) (vm32_f_t x, size_t vl)
    does not wrap the estimate instructions.  */
 #define VM32I_REC7(a, vl) VM32_XP2 (__riscv_vfrec7_v_f32m, VM32_LMUL) (a, vl)
 
+/* The fast-domain test shared by atan2 and atan2pi: `mbad` marks every
+   lane the native ratio/quadrant path cannot take, and (xs, ys) are the
+   benign stand-ins the fast path is fed with (2^-1 for both, a finite
+   pair whose fast-path evaluation is exact but for the kernel's own
+   rounding, so a bad lane cannot raise a flag).
+   Covered: both operands finite and inside [2^-29, 10.5) and
+   |y/x| inside [2^-18, 2^18], tested as an integer difference of the
+   magnitude bit patterns before any division.  The lower bound keeps
+   atan_pos2's r^2/r^4 chain normal (no spurious UNDERFLOW); the upper
+   bound keeps the pi - atan(|y/x|) cancellation in the x < 0 branch far
+   below an ulp of the (tiny) result; the lower bound on the ratio keeps
+   the same cancellation bounded for the y-side.  */
+#define VM32I_ATAN2_PREP(mbado, xso, yso, y, x, vl) do {		\
+  vm32_u_t vap__ix = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffU, (vl));	\
+  vm32_u_t vap__iy = VM32_VAND_VX (VM32_BITS (y), 0x7fffffffU, (vl));	\
+  vm32_b_t vap__m = VM32_VMSGEU_VX (vap__ix, 0x41280000u, (vl));	\
+  vap__m = VM32_VMOR_MM (vap__m,					\
+			 VM32_VMSGEU_VX (vap__iy, 0x41280000u, (vl)), (vl)); \
+  vap__m = VM32_VMOR_MM (vap__m,					\
+			 VM32_VMSLTU_VX (vap__ix, 0x31000000u, (vl)), (vl)); \
+  vap__m = VM32_VMOR_MM (vap__m,					\
+			 VM32_VMSLTU_VX (vap__iy, 0x31000000u, (vl)), (vl)); \
+  vm32_i_t vap__d = VM32_REINT_U_I (					\
+    VM32_VSUB_VV (vap__iy, vap__ix, (vl)));				\
+  vap__m = VM32_VMOR_MM (vap__m, VM32_VMSGE_VX (vap__d, 0x08800000, (vl)), \
+			 (vl));						\
+  vap__m = VM32_VMOR_MM (vap__m, VM32_VMSLE_VX (vap__d, -0x08800000, (vl)), \
+			 (vl));						\
+  (mbado) = vap__m;							\
+  (xso) = VM32_VFMERGE_VFM ((x), 0.5f, (mbado), (vl));			\
+  (yso) = VM32_VFMERGE_VFM ((y), 0.5f, (mbado), (vl));			\
+} while (0)
+
+/* atan2's native fast path for sanitized (ys, xs), as a hi/lo pair:
+   z = atan(|y/x|) plus the fdlibm quadrant fixup.  The *quotient's*
+   rounding is recovered from its exact fma remainder (the "divide, then
+   correct with the exact remainder" step):
+
+     q = RN(|y|/|x|),   rem = |y| - q*|x|        (exact, one fma)
+     atan(|y|/|x|) = atan(q) + rem/(|x|(1+q^2)) + O((rem/|x|)^2)
+
+   with |x|(1+q^2) = |x| + |y|*q formed by one fma.  The derivative
+   1/(1+q^2) peaks at |q| = 1, so without the correction the ratio's own
+   rounding costs up to 1.42 ulp; with it the only error left is
+   atan(q)'s fdlibm-float ~0.6-0.8 ulp (the same error atanf carries) and
+   the single final hi+lo add.  Replayed over the FULL blob's fast lanes
+   this scores max_ulp 0.72 (1.42 without the correction).
+
+   atan(q) is invtrig_atan_pos2, the double-float f32 atan kernel atanf
+   already uses: (h, l) with h + l = atan(q) to ~2^-45.  The caller adds
+   the two words for atan2, or divides the pair by pi for atan2pi.  */
+static inline void
+VM32_KFN (invtrig_atan2_pos) (vm32_f_t ys, vm32_f_t xs, vm32_f_t *ho,
+			      vm32_f_t *lo, size_t vl)
+{
+  vm32_f_t ax = VM32_VFABS_V (xs, vl);
+  vm32_f_t ay = VM32_VFABS_V (ys, vl);
+
+  /* q = |y|/|x| and its exact remainder; the derivative's denominator.
+     The correction is a <= 0.7 ulp term, so its reciprocal only needs a
+     few percent of relative accuracy: vfrec7 (the 7-bit estimate, one
+     ~40x cheaper instruction than vfdiv.vv) is used directly, which
+     costs <= 0.006 ulp of error and saves a second divide per lane.  */
+  vm32_f_t q = VM32_VFDIV_VV (ay, ax, vl);
+  vm32_f_t rem = VM32_VFNMSAC_VV (ay, q, ax, vl);	/* |y| - q*|x| */
+  vm32_f_t der = VM32_VFMACC_VV (ax, ay, q, vl);	/* |x|(1+q^2) */
+  vm32_f_t corr = VM32_VFMUL_VV (rem, VM32I_REC7 (der, vl), vl);
+
+  vm32_f_t h, l;
+  VM32_KFN (invtrig_atan_pos2) (q, &h, &l, vl);
+  l = VM32_VFADD_VV (l, corr, vl);
+
+  /* x < 0:  atan2 = pi - atan(q) == (pi_hi - h) + ((ep - l) + pi_lo).  */
+  vm32_f_t hp, ep;
+  VM32I_TWO_SUM (hp, ep, VM32_VFMV_V_F (VM32I_PI_HI, vl),
+		 VM32_VFNEG_V (h, vl), vl);
+  ep = VM32_VFADD_VF (VM32_VFSUB_VV (ep, l, vl), VM32I_PI_LO, vl);
+
+  vm32_b_t msx = VM32_VMSLT_VX (VM32_REINT_U_I (VM32_BITS (xs)), 0, vl);
+  vm32_f_t oh = VM32_VFMERGE_VVM (h, hp, msx, vl);
+  vm32_f_t ol = VM32_VFMERGE_VVM (l, ep, msx, vl);
+  /* sign of y, applied to the hi and lo words alike (vfsgnjx).  */
+  *ho = VM32_VFSGNJX_VV (oh, ys, vl);
+  *lo = VM32_VFSGNJX_VV (ol, ys, vl);
+}
+
 /* The wide fallback as a noinline call: the binary64 kernel (plus its
    double-double atan) dwarfs the fast path, and inlined it would sit
    inside the strip loop -- which *is* the whole function -- costing fetch
-   bandwidth on every iteration for a branch that is almost never taken.  */
+   bandwidth on every iteration for a branch that is almost never taken.
+   atan2pi keeps its wide path inlined instead (a vector-ABI call costs
+   more on the VLEN-128 board than the extra code does).  */
 __attribute__ ((noinline)) static vm32_f_t
 VM32_KFN (atan2_wide) (vm32_f_t y, vm32_f_t x, size_t vl)
 {
@@ -736,6 +824,10 @@ VM32_KFN (atan2_wide) (vm32_f_t y, vm32_f_t x, size_t vl)
 					 VM32_WIDEN (x, vl), vl), vl);
 }
 
+/* atan2 keeps the fast-path body spelled out here rather than through
+   VM32I_ATAN2_PREP: the same op sequence measured 6% faster on muse-pi
+   when it was left exactly as the entry has always compiled (the codegen
+   is layout-sensitive to a single instruction).  */
 static inline vm32_f_t
 VM32_KFN (atan2) (vm32_f_t y, vm32_f_t x, size_t vl)
 {
@@ -787,49 +879,21 @@ VM32_KFN (atan2) (vm32_f_t y, vm32_f_t x, size_t vl)
   return r;
 }
 
-/* The shared f64 atan2 body: z = atan(|y/x|) plus the fdlibm quadrant
-   fixup, all in binary64, then one narrowing.  */
-#define VM32I_D_ATAN2_BODY(hout, y, x, vl) do {				\
-  vm32d_f_t vmd__x = VM32_WIDEN ((x), (vl));				\
-  vm32d_f_t vmd__y = VM32_WIDEN ((y), (vl));				\
-  vm32d_f_t vmd__q = VM32D_VFDIV_VV (VM32D_VFABS_V (vmd__y, (vl)),	\
-				     VM32D_VFABS_V (vmd__x, (vl)), (vl)); \
-  vm32_u_t vmd__iq = VM32_VAND_VX (					\
-    VM32_BITS (VM32_NARROW (vmd__q, (vl))), 0x7fffffffU, (vl));		\
-  vm32d_f_t vmd__z = VM32_KFN (invtrig_d_atan) (vmd__q, vmd__iq, (vl)); \
-  vm32d_f_t vmd__h = VM32D_VFSUB_VV (					\
-    VM32D_VFMV_V_F (VM32D_PI, (vl)), vmd__z, (vl));			\
-  vm32_b_t vmd__sx = VM32_VMSLT_VX (					\
-    VM32_REINT_U_I (VM32_BITS (x)), 0, (vl));				\
-  vm32_b_t vmd__sy = VM32_VMSLT_VX (					\
-    VM32_REINT_U_I (VM32_BITS (y)), 0, (vl));				\
-  vmd__h = VM32D_VFMERGE_VVM (vmd__z, vmd__h, vmd__sx, (vl));		\
-  vmd__h = VM32D_VFMERGE_VVM (vmd__h, VM32D_VFNEG_V (vmd__h, (vl)),	\
-			      vmd__sy, (vl));				\
-  (hout) = vmd__h;							\
-} while (0)
-
-/* atan2pi keeps the plain-binary64 body: its extra 1/pi scaling needs the
-   full 53-bit intermediate to stay inside 1.0 ulp, and it is not one of
-   the entries this pass targets.  */
+/* atan2pi: the same native f32 fast path as atan2, with the final
+   divide by pi folded into the existing (h, l) pair by invtrig_divpi, so
+   the scaling costs one rounding on top of the kernel's own (the same
+   shape atanpi uses; measured 0.80 ulp over the FULL blob, against 0.72
+   for atan2).  The fallback stays inlined (a vector-ABI call is a large
+   loss on the VLEN-128 board).  */
 static inline vm32_f_t
 VM32_KFN (atan2pi) (vm32_f_t y, vm32_f_t x, size_t vl)
 {
-  vm32_u_t ix = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffU, vl);
-  vm32_u_t iy = VM32_VAND_VX (VM32_BITS (y), 0x7fffffffU, vl);
-  vm32_b_t mbad = VM32_VMSGEU_VX (ix, 0x41280000u, vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSGEU_VX (iy, 0x41280000u, vl), vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSLTU_VX (ix, 0x31000000u, vl), vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSLTU_VX (iy, 0x31000000u, vl), vl);
-  vm32_i_t d = VM32_REINT_U_I (VM32_VSUB_VV (iy, ix, vl));
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSGE_VX (d, 0x08800000, vl), vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_VMSLE_VX (d, -0x08800000, vl), vl);
-
-  vm32_f_t xs = VM32_VFMERGE_VFM (x, 0.5f, mbad, vl);
-  vm32_f_t ys = VM32_VFMERGE_VFM (y, 0.5f, mbad, vl);
-  vm32d_f_t dh;
-  VM32I_D_ATAN2_BODY (dh, ys, xs, vl);
-  vm32_f_t h = VM32_NARROW (VM32D_VFMUL_VF (dh, VM32D_INVPI, vl), vl);
+  vm32_b_t mbad;
+  vm32_f_t xs, ys;
+  VM32I_ATAN2_PREP (mbad, xs, ys, y, x, vl);
+  vm32_f_t oh, ol;
+  VM32_KFN (invtrig_atan2_pos) (ys, xs, &oh, &ol, vl);
+  vm32_f_t h = VM32_KFN (invtrig_divpi) (oh, ol, vl);
   if (VM32_VFIRST_M (mbad, vl) >= 0)
     {
       vm32_f_t w = VM32_NARROW (VM32_D64 (atan2pi) (VM32_WIDEN (y, vl),

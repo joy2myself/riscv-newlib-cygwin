@@ -1,0 +1,90 @@
+# a210 (VLEN 128) FULL-tier MPFR gate
+
+Native GCC 14.2 build on the board, `runner --blobs blobs/FULL` (100057 records per function).
+
+```
+libvecmath runner: blobs=blobs/FULL VLEN=128 bits (2 doubles/LMUL1)
+sqrt       n=100057  max_ulp=0.5000   mean=0.2490   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/20000 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+rsqrt      n=100057  max_ulp=0.8612   mean=0.2555   p99.9=0.7826   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 3158/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+cbrt       n=100057  max_ulp=0.6645   mean=0.2558   p99.9=0.6453   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 10609/20000 (max 3.000 ulp) agg_extra_flags=0x0  PASS
+exp        n=100057  max_ulp=0.5030   mean=0.1664   p99.9=0.4992   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 3/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+exp2       n=100057  max_ulp=0.5038   mean=0.2247   p99.9=0.4991   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+exp10      n=100057  max_ulp=0.5034   mean=0.1744   p99.9=0.4992   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 6/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+expm1      n=100057  max_ulp=0.8130   mean=0.1723   p99.9=0.7122   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 176/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+log        n=100057  max_ulp=0.7290   mean=0.2315   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/20000 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+log2       n=100057  max_ulp=0.6132   mean=0.2418   p99.9=0.5977   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 153/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+log10      n=100057  max_ulp=0.9091   mean=0.2195   p99.9=0.6671   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1135/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+log1p      n=100057  max_ulp=0.5890   mean=0.1701   p99.9=0.5215   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 542/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+log2p1     n=100057  max_ulp=1.0000   mean=0.2340   p99.9=1.0000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 3669/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+pow        n=100057  max_ulp=0.5053   mean=0.1747   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+sin        n=100057  max_ulp=0.7852   mean=0.1872   p99.9=0.6569   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 436/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+cos        n=100057  max_ulp=0.7846   mean=0.1848   p99.9=0.6681   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 442/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+tan        n=100057  max_ulp=0.7376   mean=0.2055   p99.9=0.6145   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 369/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+sincos     n=100057  max_ulp=0.8345   mean=0.2525   p99.9=0.7007   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/0 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+sinpi      n=100057  max_ulp=1.0000   mean=0.2235   p99.9=0.6104   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 12026/20000 (max inf ulp) agg_extra_flags=0x0  PASS
+cospi      n=100057  max_ulp=0.8067   mean=0.1611   p99.9=0.6194   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 10544/20000 (max inf ulp) agg_extra_flags=0x0  PASS
+tanpi      n=100057  max_ulp=1.0000   mean=0.2481   p99.9=0.6078   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 15364/20000 (max inf ulp) agg_extra_flags=0x0  PASS
+sincospi   n=100057  max_ulp=1.0000   mean=0.2918   p99.9=0.6668   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/0 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+asin       n=100057  max_ulp=0.6383   mean=0.1614   p99.9=0.5569   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 84/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+acos       n=100057  max_ulp=0.6409   mean=0.2528   p99.9=0.5786   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 94/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+atan       n=100057  max_ulp=0.9181   mean=0.2054   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 25/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+atan2      n=100057  max_ulp=0.9054   mean=0.2929   p99.9=0.7242   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1243/20000 (max 1.000 ulp) agg_extra_flags=0x4  PASS
+asinpi     n=100057  max_ulp=1.0000   mean=0.2322   p99.9=1.0000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 3398/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+acospi     n=100057  max_ulp=0.6624   mean=0.1673   p99.9=0.6046   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2601/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+atanpi     n=100057  max_ulp=1.0000   mean=0.2047   p99.9=1.0000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 5284/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+atan2pi    n=100057  max_ulp=1.0000   mean=0.1277   p99.9=0.5060   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2773/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+sinh       n=100057  max_ulp=0.6446   mean=0.1798   p99.9=0.5458   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 3434/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+cosh       n=100057  max_ulp=0.5645   mean=0.1783   p99.9=0.5458   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2488/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+tanh       n=100057  max_ulp=0.5230   mean=0.1202   p99.9=0.4991   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2660/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+asinh      n=100057  max_ulp=0.9076   mean=0.2025   p99.9=0.7180   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 3426/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+acosh      n=100057  max_ulp=0.9352   mean=0.2590   p99.9=0.9352   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1047/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+atanh      n=100057  max_ulp=0.9885   mean=0.1445   p99.9=0.7305   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 925/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+hypot      n=100057  max_ulp=0.5000   mean=0.1274   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1147/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+erf        n=100057  max_ulp=1.0000   mean=0.1626   p99.9=0.6967   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 837/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+erfc       n=100057  max_ulp=0.7976   mean=0.1441   p99.9=0.6200   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1827/20000 (max 2.000 ulp) agg_extra_flags=0x4  PASS
+tgamma     n=100057  max_ulp=1.0000   mean=0.2434   p99.9=1.0000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 4579/20000 (max 5.000 ulp) agg_extra_flags=0x0  PASS
+lgamma     n=100057  max_ulp=0.8505   mean=0.2494   p99.9=0.4998   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 4359/20000 (max 4.000 ulp) agg_extra_flags=0x0  PASS
+lgamma_r   n=100057  max_ulp=0.8740   mean=0.2485   p99.9=0.4999   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/0 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+sqrtf      n=100059  max_ulp=0.5000   mean=0.2421   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/20000 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+rsqrtf     n=100059  max_ulp=0.5000   mean=0.2413   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1599/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+cbrtf      n=100059  max_ulp=0.5239   mean=0.2397   p99.9=0.5055   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 24/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+expf       n=100059  max_ulp=0.5257   mean=0.2337   p99.9=0.5074   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 63/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+exp2f      n=100059  max_ulp=0.5000   mean=0.2238   p99.9=0.4994   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+exp10f     n=100059  max_ulp=0.5000   mean=0.2162   p99.9=0.4991   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+expm1f     n=100059  max_ulp=0.6321   mean=0.1990   p99.9=0.5414   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 66/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+logf       n=100059  max_ulp=0.5106   mean=0.2205   p99.9=0.4993   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 22/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+log2f      n=100059  max_ulp=0.5340   mean=0.1650   p99.9=0.4994   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 52/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+log10f     n=100059  max_ulp=0.5279   mean=0.2132   p99.9=0.4996   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 4/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+log1pf     n=100059  max_ulp=0.5796   mean=0.1930   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 10/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+log2p1f    n=100059  max_ulp=0.5523   mean=0.1810   p99.9=0.5002   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2412/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+powf       n=100059  max_ulp=0.5000   mean=0.2059   p99.9=0.5000   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 3/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+sinf       n=100059  max_ulp=0.5812   mean=0.2860   p99.9=0.5240   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 148/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+cosf       n=100059  max_ulp=0.5812   mean=0.2203   p99.9=0.5219   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 131/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+tanf       n=100059  max_ulp=0.6537   mean=0.2656   p99.9=0.5470   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 122/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+sincosf    n=100059  max_ulp=0.5916   mean=0.3554   p99.9=0.5353   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/0 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+sinpif     n=100059  max_ulp=0.6053   mean=0.2078   p99.9=0.5624   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 10097/20000 (max inf ulp) agg_extra_flags=0x0  PASS
+cospif     n=100059  max_ulp=0.6396   mean=0.2156   p99.9=0.5632   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 8894/20000 (max inf ulp) agg_extra_flags=0x0  PASS
+tanpif     n=100059  max_ulp=0.6965   mean=0.2129   p99.9=0.5723   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 12870/20000 (max inf ulp) agg_extra_flags=0x0  PASS
+sincospif  n=100059  max_ulp=0.6040   mean=0.2564   p99.9=0.5410   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/0 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+asinf      n=100059  max_ulp=0.8136   mean=0.2601   p99.9=0.6876   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 243/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+acosf      n=100059  max_ulp=0.8893   mean=0.2955   p99.9=0.6829   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 253/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+atanf      n=100059  max_ulp=0.8238   mean=0.2703   p99.9=0.6562   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 305/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+atan2f     n=100059  max_ulp=0.7150   mean=0.2789   p99.9=0.5767   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 123/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+asinpif    n=100059  max_ulp=0.8055   mean=0.1993   p99.9=0.6382   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 3157/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+acospif    n=100059  max_ulp=0.5000   mean=0.1437   p99.9=0.4984   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1387/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+atanpif    n=100059  max_ulp=0.8251   mean=0.1795   p99.9=0.6487   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 4745/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+atan2pif   n=100059  max_ulp=0.5000   mean=0.0978   p99.9=0.4992   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2214/20000 (max 2.000 ulp) agg_extra_flags=0x0  PASS
+sinhf      n=100059  max_ulp=0.6741   mean=0.2280   p99.9=0.5864   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 109/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+coshf      n=100059  max_ulp=0.5365   mean=0.2486   p99.9=0.5047   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 19/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+tanhf      n=100059  max_ulp=0.6855   mean=0.1518   p99.9=0.5350   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 47/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+asinhf     n=100059  max_ulp=0.5238   mean=0.1838   p99.9=0.4997   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 5/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+acoshf     n=100059  max_ulp=0.5055   mean=0.2389   p99.9=0.4986   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 1/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+atanhf     n=100059  max_ulp=0.5362   mean=0.1740   p99.9=0.5021   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 15/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+hypotf     n=100059  max_ulp=0.5000   mean=0.1385   p99.9=0.4997   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/20000 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+erff       n=100059  max_ulp=0.5005   mean=0.1443   p99.9=0.4984   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+erfcf      n=100059  max_ulp=0.5312   mean=0.1787   p99.9=0.5026   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 16/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+tgammaf    n=100059  max_ulp=0.5002   mean=0.2400   p99.9=0.4992   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 2/20000 (max 1.000 ulp) agg_extra_flags=0x0  PASS
+lgammaf    n=100059  max_ulp=0.5011   mean=0.2550   p99.9=0.4991   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/20000 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+lgamma_rf  n=100059  max_ulp=0.5011   mean=0.2541   p99.9=0.4990   >1 ulp: 0     class_fail: 0    sweep_fail: 0    flag_fail: 0    cross_diff: 0/0 (max 0.000 ulp) agg_extra_flags=0x0  PASS
+runner: 82 functions tested, 0 failed
+```
