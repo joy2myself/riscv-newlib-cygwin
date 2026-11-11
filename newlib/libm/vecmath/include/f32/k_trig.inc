@@ -13,8 +13,13 @@
    of the strip length, as the framework's length sweep requires).
 
    Reduction:
-     * sinf/cosf/tanf/sincosf: q = rint(|x| * 2/pi) and a 2-part
-       Cody-Waite split whose first part is 17-bit pio2_1, so
+     * sinf: q = rint(x/pi) and a 3-part Cody-Waite pi split, each part
+       folded with an fma so (u,e) represents r = x - q*pi to ~2^-48;
+       |u| <= pi/2, so one wide sin kernel plus the (-1)^q sign is all
+       the fast path needs (VM32_KSIN_HALF).  The 17-bit high part makes
+       q*pi_hi exact for |q| <= 6.
+     * cosf/tanf/sincosf: q = rint(|x| * 2/pi) and a 2-part Cody-Waite
+       split whose first part is 17-bit pio2_1, so
        z = |x| - q*pio2_1 is exact and u = z - q*pio2_1t carries the
        residual e = (z-u) - q*pio2_1t.  (u,e) represents the reduced
        argument to ~2^-45; the |u| >= 2^-12 gate covers the rest.
@@ -79,6 +84,15 @@
 #define VM32_PIO2_LO 1.0804334124259185e-05f	/* 0x37354443 */
 #define VM32_PI_HI   3.14159274101257324e+00f	/* 0x40490fdb */
 #define VM32_PI_LO  -8.7422776573475858e-08f	/* 0xb3bbbd2e */
+
+/* ---- modulo-pi reduction (sinf) ----
+   pi as a three-float Cody-Waite constant (sums to pi exactly in
+   binary64; the high part has 17 significant bits so that q*HI is exact
+   in binary32 for |q| <= 6, the range the sinf domain needs).  */
+#define VM32_PI_CW_HI 3.14157104492187500e+00f	/* 0x40490f80 */
+#define VM32_PI_CW_LO 2.1608668248518370e-05f	/* 0x37b54443 */
+#define VM32_PI_CW2_LO -3.3040237212844660e-13f	/* 0xaaba0000 */
+#define VM32_INVPI 3.18309873342514038086e-01f	/* 0x3ea2f983 */
 
 /* ---- bit thresholds ---- */
 #define VM32_TINY_BITS 0x39800000u	/* 2^-12 */
@@ -233,6 +247,40 @@
   VM32_VMSLTU_VX (VM32_VAND_VX (VM32_BITS (y0), 0x7fffffffu, (vl)),	\
 		  VM32_TINY_BITS, (vl))
 
+/* (p0,p1,q) = (x - q*pi as a double-float, q = rint(x/pi)), with
+   |p0| <= pi/2, so that  sin(x) = (-1)^q sin(p0+p1)  and one wide sin
+   kernel (VM32_KSIN_HALF) covers the whole reduced range.
+
+   x - q*PI_CW_HI is exact (17-bit high part, see the constants), and the
+   two low parts are folded into the tail with fma remainders, so (p0,p1)
+   represents the reduced argument to ~2^-48 relative.  */
+#define VM32_SIN_RED(y0o, y1o, qo, x, vl) do {				\
+  vm32_f_t vmsr__k = VM32_VFMUL_VF ((x), VM32_INVPI, (vl));		\
+  vm32_i_t vmsr__q = VM32_VFCVT_X_F_V_RM (vmsr__k, __RISCV_FRM_RNE, (vl)); \
+  vm32_f_t vmsr__qf = VM32_VFCVT_F_X_V (vmsr__q, (vl));			\
+  vm32_f_t vmsr__z = VM32_VFNMSAC_VF ((x), VM32_PI_CW_HI, vmsr__qf, (vl)); \
+  vm32_f_t vmsr__u = VM32_VFNMSAC_VF (vmsr__z, VM32_PI_CW_LO,		\
+				      vmsr__qf, (vl));			\
+  vm32_f_t vmsr__e = VM32_VFNMSAC_VF (VM32_VFSUB_VV (vmsr__z, vmsr__u, (vl)), \
+				      VM32_PI_CW_LO, vmsr__qf, (vl));	\
+  vmsr__e = VM32_VFNMSAC_VF (vmsr__e, VM32_PI_CW2_LO, vmsr__qf, (vl));	\
+  (y0o) = vmsr__u;							\
+  (y1o) = vmsr__e;							\
+  (qo) = vmsr__q;							\
+} while (0)
+
+/* |u| outside [2^-12, pi/2]: either the reduced argument cancels below
+   the split's resolution, or the binary32 quotient estimate rounded q
+   the wrong way (then |u| can reach 3pi/2 and the wide kernel's minimax
+   range no longer holds).  Both go to the binary64 path.  The upper
+   bound is pi/2's bit pattern, so an exactly-in-range lane is never
+   pushed out by the tail alone.  */
+#define VM32_SIN_RED_BAD(u, vl)						\
+  VM32_VMOR_MM (VM32_VMSLTU_VX (VM32_VAND_VX (VM32_BITS (u), 0x7fffffffu, \
+					       (vl)), VM32_TINY_BITS, (vl)), \
+		VM32_VMSGTU_VX (VM32_VAND_VX (VM32_BITS (u), 0x7fffffffu, \
+					      (vl)), 0x3fc90fdbu, (vl)), (vl))
+
 /* Fallback: the whole strip through the binary64 kernel.  */
 #define VM32_FALLBACK1(name, x, vl)					\
   VM32_NARROW (VM32_D64 (name) (VM32_WIDEN ((x), (vl)), (vl)), (vl))
@@ -314,23 +362,27 @@
 static inline vm32_f_t
 VM32_KFN (sin) (vm32_f_t x, size_t vl)
 {
+  /* sin is the one entry that does not need both kernels: the modulo-pi
+     reduction below leaves |u| <= pi/2 and the quadrant only flips the
+     sign of the single wide sin kernel, so the fast path evaluates one
+     polynomial instead of two plus the two-output select.  cos/tan/
+     sincos keep the pi/2 reduction and both kernels.  */
   vm32_u_t ax = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffu, vl);
   vm32_b_t mbad = VM32_RANGE_BAD (ax, VM32_TRIG_MAX, vl);
   vm32_f_t xs = VM32_VFMERGE_VFM (x, 0.5f, mbad, vl);
   vm32_f_t y0, y1;
   vm32_i_t n;
-  VM32_TRIG_RED (y0, y1, n, xs, vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_RED_BAD (y0, vl), vl);
+  VM32_SIN_RED (y0, y1, n, xs, vl);
+  mbad = VM32_VMOR_MM (mbad, VM32_SIN_RED_BAD (y0, vl), vl);
   y0 = VM32_VFMERGE_VFM (y0, 0.5f, mbad, vl);
   y1 = VM32_VFMERGE_VFM (y1, 0.0f, mbad, vl);
-  vm32_f_t sh, sl, ch, cl;
-  VM32_KSIN_DD (sh, sl, y0, y1, vl);
-  VM32_KCOS_DD (ch, cl, y0, y1, vl);
-  vm32_u_t q = VM32_TRIG_Q (n, vl);
-  vm32_f_t oh, ol;
-  VM32_TRIG_SIN2 (q, sh, sl, ch, cl, oh, ol, vl);
-  vm32_f_t r = VM32_VFADD_VV (oh, ol, vl);
-  r = VM32_VFSGNJX_VV (r, xs, vl);
+  vm32_f_t sh, sl;
+  VM32_KSIN_HALF (sh, sl, y0, y1, vl);
+  vm32_f_t r = VM32_VFSGNJX_VV (
+    VM32_VFADD_VV (sh, sl, vl),
+    VM32_FROM_BITS (VM32_VSLL_VX (
+		      VM32_VAND_VX (VM32_REINT_I_U (n), 1, vl), 31, vl)),
+    vl);
   VM32_FAST_OR_WIDE (r, VM32_FALLBACK1 (sin, x, vl), mbad, vl);
   return r;
 }
