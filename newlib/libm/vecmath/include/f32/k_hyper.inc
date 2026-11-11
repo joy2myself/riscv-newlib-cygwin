@@ -21,6 +21,8 @@
 /* f32 double-float helpers (file-local names).                       */
 /* ------------------------------------------------------------------ */
 
+#undef VM32_HYP_REC7
+#undef VM32_HYP_QDIV_DD
 #undef VM32_HYP_TWO_SUM
 #undef VM32_HYP_FAST2_SUM
 #undef VM32_HYP_DD_DIV
@@ -35,6 +37,30 @@
   (e) = VM32_VFADD_VV (							\
     VM32_VFSUB_VV ((a), VM32_VFSUB_VV (hts_s_, hts_v_, (vl)), (vl)),	\
     VM32_VFSUB_VV ((b), hts_v_, (vl)), (vl));				\
+} while (0)
+
+/* vfrec7.v -- 7-bit reciprocal estimate (f32/compat.h wraps no estimate
+   instruction).  */
+#define VM32_HYP_REC7(a, vl) VM32_XP2 (__riscv_vfrec7_v_f32m, VM32_LMUL) (a, vl)
+
+/* q = (nh+nl)/(dh+dl) for a positive normal dh, with the reciprocal
+   from the 7-bit estimate plus three Newton steps and an fma residual
+   (the VM_QDIV shape of <vecmath_dd.h>).  The three steps are needed:
+   with two, the estimate's last-bit error leaves ~1.0 ulp at the small
+   end of tanh's range.  One rounding of the exact quotient, no vfdiv.  */
+#define VM32_HYP_QDIV_DD(q, nh, nl, dh, dl, vl) do {			\
+  vm32_f_t hqd__rt = VM32_HYP_REC7 ((dh), (vl));			\
+  vm32_f_t hqd__e = VM32_VFNMSAC_VV (					\
+    VM32_VFMV_V_F (1.0f, (vl)), (dh), hqd__rt, (vl));			\
+  hqd__rt = VM32_VFMACC_VV (hqd__rt, hqd__rt, hqd__e, (vl));		\
+  hqd__e = VM32_VFNMSAC_VV (VM32_VFMV_V_F (1.0f, (vl)), (dh),		\
+			    hqd__rt, (vl));				\
+  hqd__rt = VM32_VFMACC_VV (hqd__rt, hqd__rt, hqd__e, (vl));		\
+  (q) = VM32_VFMUL_VV ((nh), hqd__rt, (vl));				\
+  hqd__e = VM32_VFNMSAC_VV ((nh), (q), (dh), (vl));			\
+  hqd__e = VM32_VFADD_VV (hqd__e, (nl), (vl));				\
+  hqd__e = VM32_VFNMSAC_VV (hqd__e, (q), (dl), (vl));			\
+  (q) = VM32_VFMACC_VV ((q), hqd__e, hqd__rt, (vl));			\
 } while (0)
 
 /* (s, e) = a + b exactly, requires |a| >= |b|.  */
@@ -220,34 +246,23 @@ VM32_KFN (tanh) (vm32_f_t x, size_t vl)
   vm32_b_t mbad = VM32_HYP_BAD (x, vl);
   vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_VFMV_V_F (1.0f, (vl)), mbad, vl);
   vm32_f_t ax = VM32_VFABS_V (xs, vl);
-  /* 2^-20 <= |x| <= 0.55: x + x*t*T(t), T deg-7 minimax fit of
-     (tanh(x)-x)/x^3 over t in [0, 0.3025].  */
-  vm32_f_t t = VM32_VFMUL_VV (xs, xs, vl);
-  vm32_f_t P = VM32_VFMUL_VF (t, 0.00036903745235464236f, vl);
-  P = VM32_VFADD_VF (P, -0.0013570987618154516f, vl);
-  P = VM32_VFMACC_VV (VM32_VFMV_V_F (0.0035680076623922107f, vl), t, P,
-		      vl);
-  P = VM32_VFMACC_VV (VM32_VFMV_V_F (-0.0088599044539411902f, vl), t, P,
-		      vl);
-  P = VM32_VFMACC_VV (VM32_VFMV_V_F (0.021869236089157921f, vl), t, P, vl);
-  P = VM32_VFMACC_VV (VM32_VFMV_V_F (-0.053968244512574162f, vl), t, P,
-		      vl);
-  P = VM32_VFMACC_VV (VM32_VFMV_V_F (0.13333333319778815f, vl), t, P, vl);
-  P = VM32_VFMACC_VV (VM32_VFMV_V_F (-0.33333333333301329f, vl), t, P, vl);
-  vm32_f_t rest = VM32_VFMUL_VV (VM32_VFMUL_VV (xs, t, vl), P, vl);
-  vm32_f_t small = VM32_VFADD_VV (xs, rest, vl);
-  /* |x| > 0.55: t/(t+2) with t = expm1(2|x|) as a double-float.  */
+  /* One formula for the whole covered range (2^-20 <= |x| <= 20):
+     tanh(x) = t/(t+2) with t = expm1(2|x|) as a double-float pair.
+     The previous shape evaluated a degree-7 minimax poly for |x| <= 0.55
+     *and* the exp/divide branch for every lane, then merged; the two
+     branches are lane-wise exclusive, so with SIMD both were paid on
+     every lane.  The double-float exp keeps t = e-1 accurate to 2^-45
+     absolute even for tiny |x| (the 1-subtraction is a two-sum, and the
+     low word carries what the subtraction exposes), so the same quotient
+     covers the small range and the old branch/merge disappears.  */
   vm32_f_t eh, el, th, tl;
   VM32_EXPF_EXP_DD (eh, el, VM32_VFMUL_VF (ax, 2.0f, vl), vl);
   VM32_EXPF_MINUS1_DD (th, tl, eh, el, vl);
   vm32_f_t uh, ue;
   VM32_HYP_TWO_SUM (uh, ue, VM32_VFMV_V_F (2.0f, (vl)), th, vl);
   ue = VM32_VFADD_VV (ue, tl, vl);
-  vm32_f_t qh, ql;
-  VM32_HYP_DD_DIV (qh, ql, th, tl, uh, ue, vl);
-  vm32_f_t big = VM32_VFADD_VV (qh, ql, vl);
-  vm32_b_t msmall = VM32_VMFLE_VF (ax, 0.55f, vl);
-  vm32_f_t r = VM32_VFMERGE_VVM (big, small, msmall, vl);
+  vm32_f_t r;
+  VM32_HYP_QDIV_DD (r, th, tl, uh, ue, vl);
   r = VM32_HYP_APPLY_SIGN (r, xs, vl);
   if (VM32_VFIRST_M (mbad, vl) >= 0)
     return VM32_KFN (tanh_fixup) (x, r, mbad, vl, VM32_KFN (tanh_fix));
