@@ -1170,6 +1170,43 @@ static const double vm_gam_r[6] = {
   VM_VMSLTU_VX (VM_VSUB_VX (VM_BITS (x), VM_GAM_B05, (vl)),		\
 		VM_GAM_B8 - VM_GAM_B05, (vl))
 
+/* True when every lane of x is in the fast domain (=> VM_GAM_LFAST).  */
+#define VM_GAM_FASTALL(x, vl)						\
+  (VM_VFIRST_M (VM_VMNOT_M (VM_GAM_FASTMASK ((x), (vl)), (vl)), (vl)) < 0)
+
+/* ---- the lgamma_r sign output on the fast path ---------------------- */
+
+/* The fast domain is x > 0, where Gamma(x) > 0, so lgamma_r's sign output
+   is +1 on every lane of a fast strip: the int32 sign vector is constant.
+   A plain e32 store of it still costs a vsetvli to e32 plus the vsetvli
+   back to e64 for the next strip, on a core where a SEW change is far
+   dearer than the three instructions it enables.  Both constants below
+   keep the store in the loop's own e64 SEW instead.  */
+
+
+/* The all-+1 int32 sign vector, for a strip where the packed store above
+   does not apply: the last one, or a 4-byte-aligned sign array.  */
+#define VM_GAM_SIGN_ONES32(vl)	VM_I32FN (vmv_v_x_) (1, (vl))
+
+/* Two int32 +1 packed into one 64-bit element, for an e64 sign store: the
+   low and the high half of every element are +1, so one store of vl
+   elements writes two consecutive all-+1 int32 sign vectors -- this
+   strip's and, when a whole strip still follows it (avl - vl >= vl), the
+   next strip's, which that strip then rewrites with the same +1s.  That
+   is the fast loop's entire sign output: one e64 store per strip, no
+   vsetvli, no e32 SEW change, no narrowing convert.
+   0x0000000100000001 as a double -- a subnormal, but every bit pattern is
+   a valid double and a load raises no flags; the FP-scalar broadcast costs
+   a gp-relative load (loop-invariant, so it is hoisted) plus one vfmv,
+   where the 33-bit integer immediate needs a lui/slli/add synthesis.  */
+#define VM_GAM_SIGNPAIR_D	(0x1p-1042 + 0x1p-1074)
+
+/* The sign bits of a +-1.0 vector, as int64 +1/-1 (no rounding mode).  */
+#define VM_GAM_SIGNBITS(s, vl)						\
+  VM_REINT_U_I (VM_VOR_VX (						\
+    VM_REINT_I_U (VM_VSRA_VX (VM_REINT_U_I (VM_BITS (s)), 63, (vl))),	\
+    1, (vl)))
+
 #define VM_GAM_LGAMMA(h, l, x, vl) do {					\
   vm_b_t vgz_m;								\
   if (VM_VFIRST_M (VM_VMNOT_M (VM_GAM_FASTMASK (x, (vl)), (vl)), (vl)) < 0) \
