@@ -10,7 +10,7 @@
 #include <riscv_vector.h>
 #include <math.h>
 
-#define VM_LMUL 2	/* 2 register groups per instruction */
+#define VM_LMUL 2	/* 64-byte strips: the table core reuses its vectors well.  */
 #include <vecmath_rvvcompat.h>
 #include <vecmath_dd.h>
 #include "vecmath_local.h"
