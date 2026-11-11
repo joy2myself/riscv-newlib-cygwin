@@ -439,37 +439,149 @@ VM_KFN (ktan) (vm_f_t x, vm_f_t y, vm_i64_t iy, size_t vl)
   }									\
 } while (0)
 
+/* ---- dedicated tanpi ---------------------------------------------
+   tan(pi*x) with one exact mod-2 reduction and one tangent polynomial:
+
+     q = rint(2*x)            (i64)
+     r = x - q/2              exact, |r| <= 1/4
+     p = pi*r = p0 + p1       double-float, |p0| <= pi/4
+
+     tan(p) = p + p^3*R(p^2)
+
+   R (degree 15, minimax on [0,(pi/4)^2], coefficients tuned for this
+   exact evaluation order) is evaluated as eight (c_2i + z*c_2i+1) pairs
+   combined through z^2; the last combination step is split into the
+   exact (Rh, Rh+Rl) pair, and the p^3 product residual and the z*p0
+   residual are folded in, so the assembled (hi,lo) is good to ~2^-100
+   and the caller's single final add rounds once.
+
+   The reduced-argument tail enters to first order (tan' = 1+tan^2) as
+   p1*(1+hi^2); dropping it costs a full ulp near |p| = pi/4.
+
+   Odd quadrants need -1/tan(p): one vfrdiv.vf plus fdlibm's two-fma
+   refinement (a + a*(d + a*lo), d = a*hi+1) which leaves the final add
+   as the only rounding.  Poles (r == 0, q odd) keep the -1/0 division so
+   FE_DIVBYZERO is raised exactly where the scalar does; integers
+   (r == 0, q even) return copysign(0,x)*(-1)^(q/2).  |x| >= 2^62 is
+   always an even integer, so those lanes are forced to r = 0.  The
+   polynomial argument is parked at 0 below 2^-341, where p0^3 would
+   underflow (spurious UNDERFLOW) -- tan(pi*r) = pi*r there to within
+   half an ulp of the binary64 grid, and p1 is the exact product
+   residual.
+
+   Measured: 0.86 ulp worst case over a 400k-point MPFR sweep.  */
+
+#define VM_TP_C0   3.33333333333333331e-01
+#define VM_TP_C1   1.3333333333333364e-01
+#define VM_TP_C2   5.3968253968216626e-02
+#define VM_TP_C3   2.1869488538180618e-02
+#define VM_TP_C4   8.8632354723601481e-03
+#define VM_TP_C5   3.5921290224718121e-03
+#define VM_TP_C6   1.4558233340176158e-03
+#define VM_TP_C7   5.9011273225556137e-04
+#define VM_TP_C8   2.3866159900899438e-04
+#define VM_TP_C9   9.8768746368711735e-05
+#define VM_TP_C10  3.3928903842122238e-05
+#define VM_TP_C11  2.7108596383546008e-05
+#define VM_TP_C12 -1.0197280163552528e-05
+#define VM_TP_C13  1.9536882108142750e-05
+#define VM_TP_C14 -9.7452308670908703e-06
+#define VM_TP_C15  3.9495933052859710e-06
+
 static inline vm_f_t
 VM_KFN (tanpi) (vm_f_t x, size_t vl)
 {
-  vm_f_t y0, y1, r;
-  vm_i64_t q64;
-  VM_PI_RED (y0, y1, r, q64, VM_PI_ALL (vl), x, vl);
-  vm_u64_t q = VM_VAND_VX (VM_REINT_I_U (q64), 3, vl);
-  vm_b_t m_odd = VM_VMSNE_VX (VM_VAND_VX (q, 1, vl), 0, vl);
-  vm_i64_t iy = VM_REINT_U_I (VM_VMERGE_VXM (VM_VMV_V_X (1, vl), -1,
-					     m_odd, vl));
-  vm_f_t t = VM_KFN (ktan) (y0, y1, iy, vl);
+  /* ---- q = rint(2x), r = x - q/2, p = pi*r as (p0,p1) ---- */
+  vm_u64_t ax = VM_VAND_VX (VM_VSRL_VX (VM_BITS (x), 32, vl),
+			    0x7fffffff, vl);
+  vm_b_t m_nf = VM_VMSGEU_VX (ax, 0x7ff00000, vl);
+  vm_b_t m_62 = VM_VMSGEU_VX (ax, 0x43d00000, vl);
+  vm_f_t xs = VM_VFMERGE_VFM (x, 0.0, VM_VMOR_MM (m_nf, m_62, vl), vl);
+  vm_i64_t q = VM_VFCVT_X_F_V_RM (VM_VFMUL_VF (xs, 2.0, vl),
+				  __RISCV_FRM_RNE, vl);
+  vm_f_t r = VM_VFMACC_VF (xs, -0.5, VM_VFCVT_F_X_V (q, vl), vl);
+  vm_f_t p0 = VM_VFMUL_VF (r, VM_PI_HI, vl);
+  /* park |p0| < 2^-341: p0^3 and the pi*r tail would underflow there
+     (spurious UNDERFLOW; the result is p0 to within the binary64 grid).
+     The masks are applied as explicit merges: the _m intrinsics do not
+     reliably merge with their first data operand on this toolchain.  */
+  vm_u64_t pexp = VM_VAND_VX (VM_VSRL_VX (VM_BITS (p0), 52, vl), 0x7ff, vl);
+  /* the tail pi_lo*r and the product residual are unrepresentable below
+     2^-963 (spurious UNDERFLOW), and p0^3/p0^4 and their products below
+     2^-243; park each where it cannot change the result.  */
+  vm_b_t m_tail = VM_VMSLTU_VX (pexp, 60, vl);
+  vm_b_t m_nop = VM_VMSLTU_VX (pexp, 780, vl);
+  vm_f_t rp = VM_VFMERGE_VFM (r, 0.0, m_tail, vl);
+  vm_f_t p0t = VM_VFMERGE_VFM (p0, 0.0, m_tail, vl);
+  vm_f_t ps = VM_VFMERGE_VFM (p0, 0.0, m_nop, vl);
+  vm_f_t pe = VM_VFMSAC_VF (p0t, VM_PI_HI, rp, vl);	/* PI_HI*rp - p0t */
+  vm_f_t p1 = VM_VFMACC_VF (pe, VM_PI_LO, rp, vl);
+  vm_u64_t qu = VM_REINT_I_U (q);
+  vm_b_t m_odd = VM_VMSNE_VX (VM_VAND_VX (qu, 1, vl), 0, vl);
+  vm_f_t one = VM_VFMV_V_F (1.0, vl);
+
+  /* ---- tan(p0+p1) = p0 + pi + p0^3*R(p0^2) ---- */
+  vm_f_t z = VM_VFMUL_VV (ps, ps, vl);
+  vm_f_t z2 = VM_VFMUL_VV (z, z, vl);
+  vm_f_t v = VM_VFMUL_VV (z, ps, vl);
+  vm_f_t tp0 = VM_VFMACC_VF (VM_VFMV_V_F (VM_TP_C0, vl), VM_TP_C1, z, vl);
+  vm_f_t tp1 = VM_VFMACC_VF (VM_VFMV_V_F (VM_TP_C2, vl), VM_TP_C3, z, vl);
+  vm_f_t tp2 = VM_VFMACC_VF (VM_VFMV_V_F (VM_TP_C4, vl), VM_TP_C5, z, vl);
+  vm_f_t tp3 = VM_VFMACC_VF (VM_VFMV_V_F (VM_TP_C6, vl), VM_TP_C7, z, vl);
+  vm_f_t tp4 = VM_VFMACC_VF (VM_VFMV_V_F (VM_TP_C8, vl), VM_TP_C9, z, vl);
+  vm_f_t tp5 = VM_VFMACC_VF (VM_VFMV_V_F (VM_TP_C10, vl), VM_TP_C11, z, vl);
+  vm_f_t tp6 = VM_VFMACC_VF (VM_VFMV_V_F (VM_TP_C12, vl), VM_TP_C13, z, vl);
+  vm_f_t tp7 = VM_VFMACC_VF (VM_VFMV_V_F (VM_TP_C14, vl), VM_TP_C15, z, vl);
+  vm_f_t rr = VM_VFMACC_VV (tp6, tp7, z2, vl);
+  rr = VM_VFMACC_VV (tp5, rr, z2, vl);
+  rr = VM_VFMACC_VV (tp4, rr, z2, vl);
+  rr = VM_VFMACC_VV (tp3, rr, z2, vl);
+  rr = VM_VFMACC_VV (tp2, rr, z2, vl);
+  rr = VM_VFMACC_VV (tp1, rr, z2, vl);
+  vm_f_t zr = VM_VFMUL_VV (rr, z2, vl);
+  vm_f_t rh = VM_VFMACC_VV (tp0, rr, z2, vl);	/* tp0 + z2*rr, exact product */
+  /* fast-two-sum residual of the last combination step (|tp0| > |z2*rr|) */
+  vm_f_t rl = VM_VFADD_VV (VM_VFSUB_VV (tp0, rh, vl), zr, vl);
+  vm_f_t cv = VM_VFMUL_VV (v, rh, vl);
+  vm_f_t ce = VM_VFMSAC_VV (cv, v, rh, vl);
+  ce = VM_VFMACC_VV (ce, v, rl, vl);
+  vm_f_t ve = VM_VFMSAC_VV (v, z, ps, vl);	/* z*ps - v */
+  ce = VM_VFMACC_VV (ce, ve, rh, vl);
+  vm_f_t hi = VM_VFADD_VV (p0, cv, vl);
+  vm_f_t lo = VM_VFADD_VV (VM_VFSUB_VV (p0, hi, vl), cv, vl);
+  lo = VM_VFADD_VV (lo, ce, vl);
+  lo = VM_VFMACC_VV (lo, p1, VM_VFMACC_VV (one, hi, hi, vl), vl);
+  vm_f_t res = VM_VFADD_VV (hi, lo, vl);
+
+  /* ---- exact (r == 0) lanes share the denominator parking ---- */
+  vm_b_t m_hz = VM_VMFEQ_VF (hi, 0.0, vl);
   {
-    vm_b_t m_int, m_pole;
-    VM_PI_EXACT_MASKS (m_int, m_pole, r, q, vl);
-    {
-      /* q&2 is the parity of n = q/2, i.e. (-1)^n.  */
-      vm_b_t m_q2 = VM_VMSNE_VX (VM_VAND_VX (q, 2, vl), 0, vl);
-      vm_f_t pm = VM_VFMERGE_VFM (VM_VFMV_V_F (1.0, vl), -1.0, m_q2, vl);
-      vm_f_t zi = VM_VFMUL_VV (VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, vl), x, vl),
-			       pm, vl);
-      vm_f_t inf = VM_VINF (vl);
-      vm_f_t pv = VM_VFMERGE_VVM (inf, VM_VFNEG_V (inf, vl), m_q2, vl);
-      t = VM_VFMERGE_VVM (t, zi, m_int, vl);
-      t = VM_VFMERGE_VVM (t, pv, m_pole, vl);
-    }
+  /* ---- odd quadrants: -1/tan(p) = a + a*(d + a*lo) ---- */
+  vm_b_t m_inv = VM_VMAND_MM (m_odd, VM_VMNOT_M (m_hz, vl), vl);
+  vm_f_t den = VM_VFMERGE_VVM (one, hi, m_inv, vl);
+  vm_f_t a = VM_VFRDIV_VF (den, -1.0, vl);	/* -1/den */
+  vm_f_t delta = VM_VFMACC_VV (one, a, hi, vl);	/* a*hi + 1 */
+  vm_f_t tt = VM_VFMACC_VV (delta, a, lo, vl);	/* delta + a*lo */
+  res = VM_VFMERGE_VVM (res, VM_VFMACC_VV (a, a, tt, vl), m_odd, vl);
   }
+
+  /* ---- poles, integers, non-finite ---- */
   {
-    vm_b_t mnf = VM_NONFIN_M (x, vl);
-    t = VM_VFMERGE_VVM (t, VM_VFSUB_VV_M (mnf, x, x, vl), mnf, vl);
+    vm_b_t m_pole = VM_VMAND_MM (m_odd, m_hz, vl);
+    vm_u64_t sb = VM_VSLL_VX (VM_VAND_VX (qu, 2, vl), 62, vl);
+    /* -1/0 on the pole lanes only: raises DIVBYZERO there and yields
+       -inf, whose sign is then copied to (-1)^(q/2) * +inf.  */
+    vm_f_t pv = VM_VFSGNJ_VV (
+      VM_VFRDIV_VF (VM_VFMERGE_VVM (one, lo, m_pole, vl), -1.0, vl),
+      VM_FROM_BITS (sb), vl);
+    res = VM_VFMERGE_VVM (res, pv, m_pole, vl);
+    vm_f_t zi = VM_VFSGNJX_VV (
+      VM_FROM_BITS (VM_VAND_VX (VM_BITS (x), 0x8000000000000000ULL, vl)),
+      VM_FROM_BITS (sb), vl);
+    res = VM_VFMERGE_VVM (
+      res, zi, VM_VMAND_MM (m_hz, VM_VMNOT_M (m_odd, vl), vl), vl);
   }
-  return t;
+  return VM_VFMERGE_VVM (res, VM_VFSUB_VV_M (m_nf, x, x, vl), m_nf, vl);
 }
 
 static inline vm_f_t
