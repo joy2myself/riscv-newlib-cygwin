@@ -15,22 +15,110 @@
    sit in: the framework's length and alignment sweeps require exactly
    that.
 
-   Fast-path accuracy: the reduction carries a two-part exponent step
-   (k*ln2 with a 15-bit hi part, so k*hi is exact for every binary32
-   exponent) and log1p(f) is evaluated as an f32 double-float pair, so the
-   final add rounds the correctly rounded f32 log at ~0.5 ulp.  log2,
-   log10 and log2p1 compose with two-part constants and keep that bound.  */
+   Fast path: one shared 128-entry mantissa-slice table (k_log_tab.inc)
+   in log2 units.  For u = 2^k * m with m in [1,2) the top 7 mantissa bits
+   select the slice, whose entry {r, l1, l2} satisfies
+
+     z = fma (r, m, -1)     EXACT in binary32 (r has 7 significant bits,
+                            so r*m is a multiple of 2^-30, and |z| < 2^-6.8
+                            leaves at most 22 significant bits -- verified
+                            per slice against both ends of the slice)
+     log2(1/r) = l1 + 127 + l2,   l1 = round_{2^-16}(log2(1/r)) - 127
+
+   l1 is a multiple of 2^-16, so float (biased exponent) + l1 is exact for
+   every binary32 exponent; l2 is packed as a 17-bit signed integer on the
+   2^-33 grid into the 17 free low mantissa bits of r, so a single
+   gathered 32-bit word yields r and l2.  Two gathers at 8-byte stride,
+   both inside one cache line, replace the three gathers (and the
+   double-float chain with its 2-3 divisions) of the previous core.
+
+   log2(1+z) = z*C1 + z^2*Q(z), C1 = log2(e) as an f32 pair, Q the
+   z-series of -C1/2 + C1 z/3 - C1 z^2/4 (|z| < 2^-6.8 makes the
+   truncation 2^-36, far below the final rounding).  The low part is
+   accumulated in 2^33-scaled form so that the packed l2 field and the
+   un-scaling both come for free; the result is one final rounding of
+   s + (se + lo), where (s, se) = hi + w exactly.
+
+   log and log10 scale the log2-units hi by ln2 / log10(2) as an exact
+   pair (ph, pl) and use their own polynomial, so the table is shared by
+   all five entries.  Slices 0, 126 and 127 use r = 1 and r = 1/2
+   exactly: l1 is then an exact integer and l2 is exactly 0, so a result
+   next to 1 -- from either side, where the answer is as small as the
+   input is close to 1 -- carries the whole answer in the polynomial and
+   never cancels against a coarse table value.  */
+
+/* ---- the shared slice table ---------------------------------------- */
+
+/* The table type and contents are LMUL-independent, so they are emitted
+   once per translation unit even though the kernels below are
+   instantiated once per VM32_LMUL.  */
+#ifndef VM32_LOGF_TAB_INCLUDED
+#define VM32_LOGF_TAB_INCLUDED 1
+#include <f32/k_log_tab.inc>
+#endif
+
+/* ------------------------------------------------------------------ */
+/* Constants.                                                         */
+/* ------------------------------------------------------------------ */
+
+/* log2 units.  C1 = log2(e) split as a full-precision f32 plus residual;
+   Q0..Q2 are the z^2-series coefficients of log2(1+z) - z*C1.  The *_33
+   forms are the same values pre-scaled by 2^33 so that the low part can
+   be accumulated in the scale of the packed l2 field.  */
+#define VM32_LOGF_L2E32_HI	0x1.715476p+0f		/* log2(e) */
+#define VM32_LOGF_L2E32_LO	0x1.4ae0cp-26f		/* log2(e) - HI */
+#define VM32_LOGF_L2E32_HI_33	0x1.715476p+33f
+#define VM32_LOGF_L2E32_LO_33	0x1.4ae0cp+7f
+#define VM32_LOGF_L2Q0		-0x1.715476p-1f		/* -C1/2 */
+#define VM32_LOGF_L2Q1		0x1.ec709ep-2f		/*  C1/3 */
+#define VM32_LOGF_L2Q2		-0x1.715476p-2f		/* -C1/4 */
+#define VM32_LOGF_L2Q0_33	-0x1.715476p+32f
+#define VM32_LOGF_L2Q1_33	0x1.ec709ep+31f
+#define VM32_LOGF_L2Q2_33	-0x1.715476p+31f
+
+/* Natural log: log2(2^k) scaled by ln2 as the exact pair (HI, LO); the
+   series of ln(1+z) has C1 = 1 exactly, so its leading term is z itself
+   and there is no residual to carry.  */
+#define VM32_LOGF_LN2_HI	0x1.62e4p-1f		/* ln 2, 15 bits */
+#define VM32_LOGF_LN2_LO	0x1.7f7d1cp-20f		/* ln 2 - HI */
+#define VM32_LOGF_LN2_LO_33	0x1.7f7d1cp+13f
+#define VM32_LOGF_LN2Q0		-0x1p-1f		/* -1/2 */
+#define VM32_LOGF_LN2Q1		0x1.555556p-2f		/*  1/3 */
+#define VM32_LOGF_LN2Q2		-0x1p-2f		/* -1/4 */
+#define VM32_LOGF_LN2Q0_33	-0x1p+32f
+#define VM32_LOGF_LN2Q1_33	0x1.555556p+31f
+#define VM32_LOGF_LN2Q2_33	-0x1p+31f
+
+/* Common log: the same shape with log10(2) and log10(e).  */
+#define VM32_LOGF_L10_2_HI	0x1.344p-2f		/* log10(2), 15 bits */
+#define VM32_LOGF_L10_2_LO	0x1.3509f8p-18f		/* log10(2) - HI */
+#define VM32_LOGF_L10_2_LO_33	0x1.3509f8p+15f
+#define VM32_LOGF_L10E_HI	0x1.bcb7b2p-2f		/* log10(e) */
+#define VM32_LOGF_L10E_LO	-0x1.5b235ep-27f	/* log10(e) - HI */
+#define VM32_LOGF_L10E_LO_33	-0x1.5b235ep+6f
+#define VM32_LOGF_L10Q0		-0x1.bcb7b2p-3f		/* -C/2 */
+#define VM32_LOGF_L10Q1		0x1.287a76p-3f		/*  C/3 */
+#define VM32_LOGF_L10Q2		-0x1.bcb7b2p-4f		/* -C/4 */
+#define VM32_LOGF_L10Q0_33	-0x1.bcb7b2p+30f
+#define VM32_LOGF_L10Q1_33	0x1.287a76p+30f
+#define VM32_LOGF_L10Q2_33	-0x1.bcb7b2p+29f
+
+/* 2^33 and 2^-33: the scale of the packed l2 field.  */
+#define VM32_LOGF_S33		0x1p+33f
+#define VM32_LOGF_IS33		0x1p-33f
 
 /* ------------------------------------------------------------------ */
 /* f32 double-float building blocks (file-local names).               */
 /* ------------------------------------------------------------------ */
 
 #undef VM32_LOGF_TWO_SUM
-#undef VM32_LOGF_FAST2_SUM
-#undef VM32_LOGF_LOG1P_DD
-#undef VM32_LOGF_REDUCE
-#undef VM32_LOGF_FIXUP1
+#undef VM32_LOGF_TAB_LD
+#undef VM32_LOGF_TAB_RED
+#undef VM32_LOGF_DEF_FIXUP
 #undef VM32_LOGF_RAISE_UF_SUB
+#undef VM32_LOGF_BADNORMAL
+#undef VM32_LOGF_BAD1P
+#undef VM32_LOGF_ONE
 
 /* (s, e) = a + b exactly (Knuth two-sum; general operand order).  */
 #define VM32_LOGF_TWO_SUM(s, e, a, b, vl) do {				\
@@ -42,11 +130,41 @@
     VM32_VFSUB_VV ((b), lts_v_, (vl)), (vl));				\
 } while (0)
 
-/* (s, e) = a + b exactly, requires |a| >= |b|.  */
-#define VM32_LOGF_FAST2_SUM(s, e, a, b, vl) do {			\
-  (s) = VM32_VFADD_VV ((a), (b), (vl));					\
-  (e) = VM32_VFSUB_VV ((b), VM32_VFSUB_VV ((s), (a), (vl)), (vl));	\
+/* Load the slice entry selected by off (8 * the top 7 mantissa bits):
+   r = the f32 mantissa, l2f = l2 * 2^33 as a float, l1 = the f32 hi part.
+   The packed word's low 17 bits carry l2 in two's complement, so the
+   sign-extending shift pair turns them into l2 * 2^33 directly.  */
+#define VM32_LOGF_TAB_LD(r, l2f, l1, off, vl) do {			\
+  vm32_u_t ltw_w_ = VM32_VLUXEI32_U (&__vm32_log2_tab[0].rl2,		\
+				     (off), (vl));			\
+  (r) = VM32_FROM_BITS (VM32_VAND_VX (ltw_w_, 0xfffe0000u, (vl)));	\
+  (l2f) = VM32_VFCVT_F_X_V (VM32_VSRA_VX (				\
+    VM32_REINT_U_I (VM32_VSLL_VX (ltw_w_, 15, (vl))), 15, (vl)), (vl));	\
+  (l1) = VM32_VLUXEI32 (&__vm32_log2_tab[0].l1, (off), (vl));		\
 } while (0)
+
+/* b = bits(u), off = table byte offset, kf = (float) biased exponent,
+   m = mantissa of u in [1,2) (exact, no multiply).  */
+#define VM32_LOGF_TAB_RED(b, off, kf, m, u, vl) do {			\
+  (b) = VM32_BITS (u);							\
+  (off) = VM32_VAND_VX (VM32_VSRL_VX ((b), 13, (vl)), 0x3f8u, (vl));	\
+  (kf) = VM32_VFCVT_F_X_V (						\
+    VM32_REINT_U_I (VM32_VSRL_VX ((b), 23, (vl))), (vl));		\
+  (m) = VM32_FROM_BITS (VM32_VOR_VX (					\
+    VM32_VAND_VX ((b), 0x007fffffu, (vl)), 0x3f800000u, (vl)));		\
+} while (0)
+
+/* ---- binary32 double-float log pair (used by f32/k_hyperinv.inc) ---- */
+
+/* (h, l) = log(x) as a double-float pair for normal positive x.  The
+   hyperinv kernels (asinh / acosh / atanh) evaluate the log of a
+   double-float argument and need the pair, not a rounded result, so this
+   entry point keeps the division-based double-float chain: one exact
+   residual division per term instead of the slice table.  */
+
+#undef VM32_LOGF_LOG1P_DD
+#undef VM32_LOGF_REDUCE
+#undef VM32_LOGF_LOG_DD
 
 /* (ph, pl) = log1p(f) as a double-float pair, f in [-0.4143, 0.4143].
    log1p(f) = 2*atanh(f/(2+f)); the atanh series needs only a few terms
@@ -100,17 +218,8 @@
 		      (vl));						\
 } while (0)
 
-/* Two-part constants: 15 significant bits in the hi part keeps k*hi
-   exact for every binary32 exponent k, and the f32 lo part then carries
-   the remaining ~2^-43 relative accuracy.  */
-#define VM32_LOGF_LN2_HI	0.693145751953125f	/* 0x3f317200 */
-#define VM32_LOGF_LN2_LO	1.428606765330187e-06f	/* 0x35bfbe8e */
-#define VM32_LOGF_L2E_HI	1.44268798828125f	/* 0x3fb8aa00 */
-#define VM32_LOGF_L2E_LO	7.052607543300837e-06f	/* 0x36eca570 */
-#define VM32_LOGF_L10E_HI	0.4342803955078125f	/* 0x3ede5a00 */
-#define VM32_LOGF_L10E_LO	1.408639582223259e-05f	/* 0x376c549c */
-#define VM32_LOGF_L10_2_HI	0.301025390625f		/* 0x3e9a2000 */
-#define VM32_LOGF_L10_2_LO	4.605039066518657e-06f	/* 0x369a84fc */
+/* The double-float chain below uses the same ln2 pair as the table core
+   (VM32_LOGF_LN2_HI / _LO), defined with the other constants above.  */
 
 /* (h, l) = log(x) for normal positive x.  */
 #define VM32_LOGF_LOG_DD(h, l, x, vl) do {				\
@@ -134,7 +243,6 @@
    the previous widen / binary64 kernel / narrow path produced for it.
    Buffer bound: vl <= VLMAX(e32, LMUL <= 4) = VLEN/8 lanes, 600 covers
    VLEN up to 4800.  */
-#undef VM32_LOGF_DEF_FIXUP
 #define VM32_LOGF_DEF_FIXUP(name)					\
   __attribute__ ((noinline)) static vm32_f_t				\
   VM32_KFN (name) (vm32_f_t x, vm32_f_t r, vm32_b_t m, size_t vl,	\
@@ -175,19 +283,32 @@ VM32_LOGF_DEF_FIXUP (log2p1_fixup)
   (yo) = VM32_VFADD_VV_MU (vuf_m_, (yo), (yo), vuf_z_, (vl));		\
 } while (0)
 
-/* ---- log / log2 / log10 ------------------------------------------- */
+/* ---- exceptional-lane masks --------------------------------------- */
 
-/* Exceptional lanes for the plain log family: anything that is not a
-   positive normal binary32 (zero, subnormal, negative, Inf, NaN).  */
+/* Not a positive normal binary32: zero, subnormal, negative, Inf, NaN.
+   One unsigned window test on the raw bit pattern: b - 2^-126's pattern
+   leaves [0, 0x7effffff] exactly for the positive normals, and every
+   other class (b < 2^-126, b > FLT_MAX, or b >= 0x80000000 with the sign
+   bit set) wraps or steps outside it.  */
 #define VM32_LOGF_BADNORMAL(x, vl)					\
+  VM32_VMSGEU_VX (							\
+    VM32_VSUB_VX (VM32_BITS (x), 0x00800000u, (vl)), 0x7f000000u, (vl))
+
+/* Exceptional lanes for log1p/log2p1: x < -0.94 (bits above -0.94 as x
+   grows more negative; covers -Inf and negative NaN), |x| < 2^-30 or
+   |x| >= 2^60 (the unsigned window test on |x|).  */
+#define VM32_LOGF_BAD1P(x, vl)						\
   VM32_VMOR_MM (							\
     VM32_VMSGEU_VX (							\
       VM32_VSUB_VX (VM32_VAND_VX (VM32_BITS (x), 0x7fffffff, (vl)),	\
-		    0x00800000u, (vl)),					\
-      0x7f000000u, (vl)),						\
-    VM32_VMSGEU_VX (VM32_BITS (x), 0x80000000u, (vl)), (vl))
+		    0x30800000u, (vl)),					\
+      0x2d000000u, (vl)),						\
+    VM32_VMSGTU_VX (VM32_BITS (x), 0xbf733333u, (vl)), (vl))
 
-#define VM32_LOGF_ONE(vl) VM32_VFMV_V_F (1.0f, (vl))
+/* Bad lanes are replaced by 0.0 before any arithmetic: the fast path stays
+   finite on it (m = 0, z = -1) and the epilogue overwrites those lanes, so
+   the filler never reaches the result.  0.0 also needs no constant load.  */
+#define VM32_LOGF_SAFE(vl) VM32_VFMV_V_F (0.0f, (vl))
 
 static inline float
 VM32_KFN (log_fix) (float x)
@@ -207,251 +328,117 @@ VM32_KFN (log10_fix) (float x)
   return (float) log10 ((double) x);
 }
 
-static inline vm32_f_t
-VM32_KFN (log) (vm32_f_t x, size_t vl, double (*fixup) (double))
-{
-  (void) fixup;
-  vm32_b_t mbad = VM32_LOGF_BADNORMAL (x, vl);
-  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_ONE (vl), mbad, vl);
-  vm32_f_t h, l;
-  VM32_LOGF_LOG_DD (h, l, xs, vl);
-  vm32_f_t r = VM32_VFADD_VV (h, l, vl);
-  if (VM32_VFIRST_M (mbad, vl) >= 0)
-    return VM32_KFN (log_fixup) (x, r, mbad, vl, VM32_KFN (log_fix));
-  return r;
-}
+/* ---- log2 ---------------------------------------------------------- */
 
 static inline vm32_f_t
 VM32_KFN (log2) (vm32_f_t x, size_t vl, double (*fixup) (double))
 {
   (void) fixup;
   vm32_b_t mbad = VM32_LOGF_BADNORMAL (x, vl);
-  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_ONE (vl), mbad, vl);
-  vm32_f_t ph, pl, kf;
-  VM32_LOGF_REDUCE (ph, pl, kf, xs, vl);
-  /* log2(x) = k + log1p(f)*log2(e), the product carried as a pair.  */
-  vm32_f_t p = VM32_VFMUL_VF (ph, VM32_LOGF_L2E_HI, (vl));
-  vm32_f_t pe = VM32_VFMSAC_VF (p, VM32_LOGF_L2E_HI, ph, (vl));
+  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_SAFE (vl), mbad, vl);
+  vm32_u_t b, off;
+  vm32_f_t kf, m, r, l2f, l1;
+  VM32_LOGF_TAB_RED (b, off, kf, m, xs, vl);
+  VM32_LOGF_TAB_LD (r, l2f, l1, off, vl);
+  /* z = r*m - 1 exact; hi = k + log2(1/r) exact.  */
+  vm32_f_t z = VM32_VFMACC_VV (VM32_VFMV_V_F (-1.0f, (vl)), r, m, (vl));
+  vm32_f_t hi = VM32_VFADD_VV (kf, l1, (vl));
+  /* (w, ee) = z*C1 split exactly.  */
+  vm32_f_t w = VM32_VFMUL_VF (z, VM32_LOGF_L2E32_HI, (vl));
+  vm32_f_t ee = VM32_VFMSAC_VF (w, VM32_LOGF_L2E32_HI, z, (vl));
+  /* lo = l2 + z^2*Q(z) + z*C1_lo + ee, accumulated in 2^33-scaled form.  */
+  vm32_f_t z2 = VM32_VFMUL_VV (z, z, (vl));
+  vm32_f_t q = VM32_VFMACC_VF (VM32_VFMV_V_F (VM32_LOGF_L2Q0_33, (vl)),
+			       VM32_LOGF_L2Q1_33, z, (vl));
+  q = VM32_VFMACC_VF (q, VM32_LOGF_L2Q2_33, z2, (vl));
+  vm32_f_t lo = VM32_VFMACC_VV (l2f, z2, q, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_L2E32_LO_33, z, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_S33, ee, (vl));
+  /* one final rounding of hi + w + (se + lo).  */
   vm32_f_t s, se;
-  VM32_LOGF_TWO_SUM (s, se, kf, p, (vl));
-  pe = VM32_VFADD_VV (pe, VM32_VFMUL_VF (pl, VM32_LOGF_L2E_HI, (vl)),
-		      (vl));
-  pe = VM32_VFMACC_VF (pe, VM32_LOGF_L2E_LO, ph, (vl));
-  vm32_f_t r = VM32_VFADD_VV (s, VM32_VFADD_VV (se, pe, (vl)), (vl));
+  VM32_LOGF_TWO_SUM (s, se, hi, w, vl);
+  vm32_f_t res = VM32_VFADD_VV (s, VM32_VFMACC_VF (se, VM32_LOGF_IS33, lo,
+						   (vl)), (vl));
   if (VM32_VFIRST_M (mbad, vl) >= 0)
-    return VM32_KFN (log2_fixup) (x, r, mbad, vl, VM32_KFN (log2_fix));
-  return r;
+    return VM32_KFN (log2_fixup) (x, res, mbad, vl, VM32_KFN (log2_fix));
+  return res;
 }
+
+/* ---- log10 --------------------------------------------------------- */
 
 static inline vm32_f_t
 VM32_KFN (log10) (vm32_f_t x, size_t vl, double (*fixup) (double))
 {
   (void) fixup;
   vm32_b_t mbad = VM32_LOGF_BADNORMAL (x, vl);
-  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_ONE (vl), mbad, vl);
-  vm32_f_t ph, pl, kf;
-  VM32_LOGF_REDUCE (ph, pl, kf, xs, vl);
-  /* log10(x) = k*log10(2) + log1p(f)*log10(e).  */
-  vm32_f_t base = VM32_VFMUL_VF (kf, VM32_LOGF_L10_2_HI, (vl));
-  vm32_f_t p = VM32_VFMUL_VF (ph, VM32_LOGF_L10E_HI, (vl));
-  vm32_f_t pe = VM32_VFMSAC_VF (p, VM32_LOGF_L10E_HI, ph, (vl));
+  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_SAFE (vl), mbad, vl);
+  vm32_u_t b, off;
+  vm32_f_t kf, m, r, l2f, l1;
+  VM32_LOGF_TAB_RED (b, off, kf, m, xs, vl);
+  VM32_LOGF_TAB_LD (r, l2f, l1, off, vl);
+  vm32_f_t z = VM32_VFMACC_VV (VM32_VFMV_V_F (-1.0f, (vl)), r, m, (vl));
+  vm32_f_t hi = VM32_VFADD_VV (kf, l1, (vl));
+  /* (ph, pl) = hi*log10(2) split exactly; (w, ee) = z*log10(e) split.  */
+  vm32_f_t ph = VM32_VFMUL_VF (hi, VM32_LOGF_L10_2_HI, (vl));
+  vm32_f_t pl = VM32_VFMSAC_VF (ph, VM32_LOGF_L10_2_HI, hi, (vl));
+  vm32_f_t w = VM32_VFMUL_VF (z, VM32_LOGF_L10E_HI, (vl));
+  vm32_f_t ee = VM32_VFMSAC_VF (w, VM32_LOGF_L10E_HI, z, (vl));
+  /* lo = log10(2)*l2 + z^2*Q(z) + z*C1_lo + hi*log10(2)_lo + pl + ee.  */
+  vm32_f_t z2 = VM32_VFMUL_VV (z, z, (vl));
+  vm32_f_t q = VM32_VFMACC_VF (VM32_VFMV_V_F (VM32_LOGF_L10Q0_33, (vl)),
+			       VM32_LOGF_L10Q1_33, z, (vl));
+  q = VM32_VFMACC_VF (q, VM32_LOGF_L10Q2_33, z2, (vl));
+  vm32_f_t lo = VM32_VFMACC_VV (
+    VM32_VFMUL_VF (l2f, VM32_LOGF_L10_2_HI, (vl)), z2, q, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_L10E_LO_33, z, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_L10_2_LO_33, hi, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_S33, pl, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_S33, ee, (vl));
   vm32_f_t s, se;
-  VM32_LOGF_TWO_SUM (s, se, base, p, (vl));
-  pe = VM32_VFADD_VV (pe, VM32_VFMUL_VF (pl, VM32_LOGF_L10E_HI, (vl)),
-		      (vl));
-  pe = VM32_VFMACC_VF (pe, VM32_LOGF_L10E_LO, ph, (vl));
-  pe = VM32_VFMACC_VF (pe, VM32_LOGF_L10_2_LO, kf, (vl));
-  vm32_f_t r = VM32_VFADD_VV (s, VM32_VFADD_VV (se, pe, (vl)), (vl));
+  VM32_LOGF_TWO_SUM (s, se, ph, w, vl);
+  vm32_f_t res = VM32_VFADD_VV (s, VM32_VFMACC_VF (se, VM32_LOGF_IS33, lo,
+						   (vl)), (vl));
   if (VM32_VFIRST_M (mbad, vl) >= 0)
-    return VM32_KFN (log10_fixup) (x, r, mbad, vl, VM32_KFN (log10_fix));
-  return r;
+    return VM32_KFN (log10_fixup) (x, res, mbad, vl, VM32_KFN (log10_fix));
+  return res;
 }
 
-/* ---- log2 table core (log2p1) -------------------------------------- */
+/* ---- log ----------------------------------------------------------- */
 
-/* The binary32 twin of the binary64 log2/log2p1 table core: one exact FMA
-   residual instead of a division, and no double-float combine.
-
-   u = 2^k * m with m in [1,2).  The top 7 mantissa bits select one of 128
-   slices; the entry {r, l1, l2} holds r = q/128 with q = round(128/m_mid),
-   so
-
-     z = fma (r, m, -1)      EXACT in binary32: r*m is a multiple of 2^-30
-                             and |z| <= 2^-6.79, i.e. at most 23 significant
-                             bits (verified per slice against both ends of
-                             the slice, see the table below)
-
-   and l1 + l2 = log2(1/r), split so that l1 is a multiple of 2^-12 -- then
-   k + l1 is exact for every binary32 exponent (|k| <= 60 needs 6 bits) and
-   only the lo part rounds.  Slices 0 and 127 use r = 1 and r = 1/2 exactly:
-   l1 = 0 and l1 = 1, so log2(u) next to 1 -- from either side -- carries the
-   whole answer in the polynomial instead of cancelling against a coarse
-   table value.
-
-   log2(1+z) = z*C1 + z^2*Q(z) with C1 = log2(e) split as an f32 pair and
-   Q the z-series of -C1/2 + C1 z/3 - C1 z^2/4 (|z| <= 2^-6.79 makes the
-   truncation 2^-31, far below the final rounding).  */
-
-#ifndef VM32_LOGF_LOG2_CORE_TAB
-#define VM32_LOGF_LOG2_CORE_TAB 1
-
-static const struct vm32_log2_core_ent
+static inline vm32_f_t
+VM32_KFN (log) (vm32_f_t x, size_t vl, double (*fixup) (double))
 {
-  float r, l1, l2, pad;
-} __vm32_log2_core_tab[128] =
-{
-  { 0x1p+0f, -0x1.fcp+6f, 0.0f, 0.0f },                   /*   0  r = 128/128 */
-  { 0x1.fcp-1f, -0x1.fbf48p+6f, 0x1.63dd1p-14f, 0.0f },   /*   1  r = 127/128 */
-  { 0x1.f8p-1f, -0x1.fbe8cp+6f, 0x1.f7431p-17f, 0.0f },   /*   2  r = 126/128 */
-  { 0x1.f4p-1f, -0x1.fbddp+6f, 0x1.2e3932p-15f, 0.0f },   /*   3  r = 125/128 */
-  { 0x1.fp-1f, -0x1.fbd1p+6f, -0x1.8d66c4p-14f, 0.0f },   /*   4  r = 124/128 */
-  { 0x1.ecp-1f, -0x1.fbc54p+6f, 0x1.d7a3e4p-14f, 0.0f },  /*   5  r = 123/128 */
-  { 0x1.e8p-1f, -0x1.fbb9p+6f, -0x1.33568p-14f, 0.0f },   /*   6  r = 122/128 */
-  { 0x1.e4p-1f, -0x1.fbadp+6f, 0x1.583f9ap-14f, 0.0f },   /*   7  r = 121/128 */
-  { 0x1.ep-1f, -0x1.fba0cp+6f, 0x1.8125b4p-14f, 0.0f },   /*   8  r = 120/128 */
-  { 0x1.dcp-1f, -0x1.fb944p+6f, -0x1.6372a4p-15f, 0.0f }, /*   9  r = 119/128 */
-  { 0x1.d8p-1f, -0x1.fb87cp+6f, -0x1.3945c4p-14f, 0.0f }, /*  10  r = 118/128 */
-  { 0x1.d4p-1f, -0x1.fb7b4p+6f, -0x1.c731ap-19f, 0.0f },  /*  11  r = 117/128 */
-  { 0x1.d4p-1f, -0x1.fb7b4p+6f, -0x1.c731ap-19f, 0.0f },  /*  12  r = 117/128 */
-  { 0x1.dp-1f, -0x1.fb6e8p+6f, -0x1.291eaap-14f, 0.0f },  /*  13  r = 116/128 */
-  { 0x1.ccp-1f, -0x1.fb61cp+6f, -0x1.049af4p-15f, 0.0f }, /*  14  r = 115/128 */
-  { 0x1.c8p-1f, -0x1.fb55p+6f, 0x1.ee15p-14f, 0.0f },     /*  15  r = 114/128 */
-  { 0x1.c4p-1f, -0x1.fb47cp+6f, -0x1.cfe71cp-14f, 0.0f }, /*  16  r = 113/128 */
-  { 0x1.c4p-1f, -0x1.fb47cp+6f, -0x1.cfe71cp-14f, 0.0f }, /*  17  r = 113/128 */
-  { 0x1.cp-1f, -0x1.fb3acp+6f, 0x1.30158p-16f, 0.0f },    /*  18  r = 112/128 */
-  { 0x1.bcp-1f, -0x1.fb2d8p+6f, 0x1.296a9ap-16f, 0.0f },  /*  19  r = 111/128 */
-  { 0x1.b8p-1f, -0x1.fb2p+6f, -0x1.cc2cp-14f, 0.0f },     /*  20  r = 110/128 */
-  { 0x1.b8p-1f, -0x1.fb2p+6f, -0x1.cc2cp-14f, 0.0f },     /*  21  r = 110/128 */
-  { 0x1.b4p-1f, -0x1.fb128p+6f, -0x1.ee960ep-14f, 0.0f }, /*  22  r = 109/128 */
-  { 0x1.bp-1f, -0x1.fb05p+6f, -0x1.3ab7cep-18f, 0.0f },   /*  23  r = 108/128 */
-  { 0x1.acp-1f, -0x1.faf74p+6f, -0x1.8f935p-17f, 0.0f },  /*  24  r = 107/128 */
-  { 0x1.acp-1f, -0x1.faf74p+6f, -0x1.8f935p-17f, 0.0f },  /*  25  r = 107/128 */
-  { 0x1.a8p-1f, -0x1.fae98p+6f, 0x1.c05364p-14f, 0.0f },  /*  26  r = 106/128 */
-  { 0x1.a4p-1f, -0x1.fadb8p+6f, 0x1.cd2b14p-14f, 0.0f },  /*  27  r = 105/128 */
-  { 0x1.a4p-1f, -0x1.fadb8p+6f, 0x1.cd2b14p-14f, 0.0f },  /*  28  r = 105/128 */
-  { 0x1.ap-1f, -0x1.facd4p+6f, -0x1.1c8f12p-22f, 0.0f },  /*  29  r = 104/128 */
-  { 0x1.9cp-1f, -0x1.fabfp+6f, 0x1.805f1p-16f, 0.0f },    /*  30  r = 103/128 */
-  { 0x1.9cp-1f, -0x1.fabfp+6f, 0x1.805f1p-16f, 0.0f },    /*  31  r = 103/128 */
-  { 0x1.98p-1f, -0x1.fab08p+6f, -0x1.044d32p-14f, 0.0f }, /*  32  r = 102/128 */
-  { 0x1.94p-1f, -0x1.faa2p+6f, -0x1.18708ap-17f, 0.0f },  /*  33  r = 101/128 */
-  { 0x1.94p-1f, -0x1.faa2p+6f, -0x1.18708ap-17f, 0.0f },  /*  34  r = 101/128 */
-  { 0x1.9p-1f, -0x1.fa934p+6f, -0x1.e12f34p-15f, 0.0f },  /*  35  r = 100/128 */
-  { 0x1.9p-1f, -0x1.fa934p+6f, -0x1.e12f34p-15f, 0.0f },  /*  36  r = 100/128 */
-  { 0x1.8cp-1f, -0x1.fa848p+6f, 0x1.3e059ep-15f, 0.0f },  /*  37  r =  99/128 */
-  { 0x1.88p-1f, -0x1.fa758p+6f, 0x1.30158p-15f, 0.0f },   /*  38  r =  98/128 */
-  { 0x1.88p-1f, -0x1.fa758p+6f, 0x1.30158p-15f, 0.0f },   /*  39  r =  98/128 */
-  { 0x1.84p-1f, -0x1.fa664p+6f, -0x1.f1aad2p-15f, 0.0f }, /*  40  r =  97/128 */
-  { 0x1.84p-1f, -0x1.fa664p+6f, -0x1.f1aad2p-15f, 0.0f }, /*  41  r =  97/128 */
-  { 0x1.8p-1f, -0x1.fa57p+6f, -0x1.a39fbep-20f, 0.0f },   /*  42  r =  96/128 */
-  { 0x1.8p-1f, -0x1.fa57p+6f, -0x1.a39fbep-20f, 0.0f },   /*  43  r =  96/128 */
-  { 0x1.7cp-1f, -0x1.fa478p+6f, -0x1.07509cp-15f, 0.0f }, /*  44  r =  95/128 */
-  { 0x1.78p-1f, -0x1.fa38p+6f, 0x1.9dc2d4p-14f, 0.0f },   /*  45  r =  94/128 */
-  { 0x1.78p-1f, -0x1.fa38p+6f, 0x1.9dc2d4p-14f, 0.0f },   /*  46  r =  94/128 */
-  { 0x1.74p-1f, -0x1.fa28p+6f, -0x1.93f544p-14f, 0.0f },  /*  47  r =  93/128 */
-  { 0x1.74p-1f, -0x1.fa28p+6f, -0x1.93f544p-14f, 0.0f },  /*  48  r =  93/128 */
-  { 0x1.7p-1f, -0x1.fa184p+6f, 0x1.f5fe54p-14f, 0.0f },   /*  49  r =  92/128 */
-  { 0x1.7p-1f, -0x1.fa184p+6f, 0x1.f5fe54p-14f, 0.0f },   /*  50  r =  92/128 */
-  { 0x1.6cp-1f, -0x1.fa08p+6f, 0x1.2ba344p-16f, 0.0f },   /*  51  r =  91/128 */
-  { 0x1.6cp-1f, -0x1.fa08p+6f, 0x1.2ba344p-16f, 0.0f },   /*  52  r =  91/128 */
-  { 0x1.68p-1f, -0x1.f9f7cp+6f, 0x1.7a9734p-14f, 0.0f },  /*  53  r =  90/128 */
-  { 0x1.68p-1f, -0x1.f9f7cp+6f, 0x1.7a9734p-14f, 0.0f },  /*  54  r =  90/128 */
-  { 0x1.64p-1f, -0x1.f9e74p+6f, 0x1.955e18p-14f, 0.0f },  /*  55  r =  89/128 */
-  { 0x1.64p-1f, -0x1.f9e74p+6f, 0x1.955e18p-14f, 0.0f },  /*  56  r =  89/128 */
-  { 0x1.6p-1f, -0x1.f9d68p+6f, 0x1.583f9ap-15f, 0.0f },   /*  57  r =  88/128 */
-  { 0x1.6p-1f, -0x1.f9d68p+6f, 0x1.583f9ap-15f, 0.0f },   /*  58  r =  88/128 */
-  { 0x1.5cp-1f, -0x1.f9c58p+6f, -0x1.2fad2ap-14f, 0.0f }, /*  59  r =  87/128 */
-  { 0x1.5cp-1f, -0x1.f9c58p+6f, -0x1.2fad2ap-14f, 0.0f }, /*  60  r =  87/128 */
-  { 0x1.58p-1f, -0x1.f9b48p+6f, 0x1.408c78p-18f, 0.0f },  /*  61  r =  86/128 */
-  { 0x1.58p-1f, -0x1.f9b48p+6f, 0x1.408c78p-18f, 0.0f },  /*  62  r =  86/128 */
-  { 0x1.58p-1f, -0x1.f9b48p+6f, 0x1.408c78p-18f, 0.0f },  /*  63  r =  86/128 */
-  { 0x1.54p-1f, -0x1.f9a34p+6f, 0x1.13eb02p-15f, 0.0f },  /*  64  r =  85/128 */
-  { 0x1.54p-1f, -0x1.f9a34p+6f, 0x1.13eb02p-15f, 0.0f },  /*  65  r =  85/128 */
-  { 0x1.5p-1f, -0x1.f991cp+6f, 0x1.15db84p-16f, 0.0f },   /*  66  r =  84/128 */
-  { 0x1.5p-1f, -0x1.f991cp+6f, 0x1.15db84p-16f, 0.0f },   /*  67  r =  84/128 */
-  { 0x1.4cp-1f, -0x1.f98p+6f, -0x1.4ac62cp-15f, 0.0f },   /*  68  r =  83/128 */
-  { 0x1.4cp-1f, -0x1.f98p+6f, -0x1.4ac62cp-15f, 0.0f },   /*  69  r =  83/128 */
-  { 0x1.4cp-1f, -0x1.f98p+6f, -0x1.4ac62cp-15f, 0.0f },   /*  70  r =  83/128 */
-  { 0x1.48p-1f, -0x1.f96e4p+6f, 0x1.de3262p-14f, 0.0f },  /*  71  r =  82/128 */
-  { 0x1.48p-1f, -0x1.f96e4p+6f, 0x1.de3262p-14f, 0.0f },  /*  72  r =  82/128 */
-  { 0x1.44p-1f, -0x1.f95cp+6f, -0x1.a39fbep-18f, 0.0f },  /*  73  r =  81/128 */
-  { 0x1.44p-1f, -0x1.f95cp+6f, -0x1.a39fbep-18f, 0.0f },  /*  74  r =  81/128 */
-  { 0x1.44p-1f, -0x1.f95cp+6f, -0x1.a39fbep-18f, 0.0f },  /*  75  r =  81/128 */
-  { 0x1.4p-1f, -0x1.f949cp+6f, 0x1.87b432p-14f, 0.0f },   /*  76  r =  80/128 */
-  { 0x1.4p-1f, -0x1.f949cp+6f, 0x1.87b432p-14f, 0.0f },   /*  77  r =  80/128 */
-  { 0x1.3cp-1f, -0x1.f937p+6f, -0x1.24cea4p-14f, 0.0f },  /*  78  r =  79/128 */
-  { 0x1.3cp-1f, -0x1.f937p+6f, -0x1.24cea4p-14f, 0.0f },  /*  79  r =  79/128 */
-  { 0x1.3cp-1f, -0x1.f937p+6f, -0x1.24cea4p-14f, 0.0f },  /*  80  r =  79/128 */
-  { 0x1.38p-1f, -0x1.f9244p+6f, -0x1.eac382p-20f, 0.0f }, /*  81  r =  78/128 */
-  { 0x1.38p-1f, -0x1.f9244p+6f, -0x1.eac382p-20f, 0.0f }, /*  82  r =  78/128 */
-  { 0x1.34p-1f, -0x1.f9114p+6f, 0x1.f04a5ap-15f, 0.0f },  /*  83  r =  77/128 */
-  { 0x1.34p-1f, -0x1.f9114p+6f, 0x1.f04a5ap-15f, 0.0f },  /*  84  r =  77/128 */
-  { 0x1.34p-1f, -0x1.f9114p+6f, 0x1.f04a5ap-15f, 0.0f },  /*  85  r =  77/128 */
-  { 0x1.3p-1f, -0x1.f8fep+6f, 0x1.f4a37ep-14f, 0.0f },    /*  86  r =  76/128 */
-  { 0x1.3p-1f, -0x1.f8fep+6f, 0x1.f4a37ep-14f, 0.0f },    /*  87  r =  76/128 */
-  { 0x1.3p-1f, -0x1.f8fep+6f, 0x1.f4a37ep-14f, 0.0f },    /*  88  r =  76/128 */
-  { 0x1.2cp-1f, -0x1.f8ea4p+6f, -0x1.ee4c32p-15f, 0.0f }, /*  89  r =  75/128 */
-  { 0x1.2cp-1f, -0x1.f8ea4p+6f, -0x1.ee4c32p-15f, 0.0f }, /*  90  r =  75/128 */
-  { 0x1.2cp-1f, -0x1.f8ea4p+6f, -0x1.ee4c32p-15f, 0.0f }, /*  91  r =  75/128 */
-  { 0x1.28p-1f, -0x1.f8d68p+6f, 0x1.43a496p-16f, 0.0f },  /*  92  r =  74/128 */
-  { 0x1.28p-1f, -0x1.f8d68p+6f, 0x1.43a496p-16f, 0.0f },  /*  93  r =  74/128 */
-  { 0x1.28p-1f, -0x1.f8d68p+6f, 0x1.43a496p-16f, 0.0f },  /*  94  r =  74/128 */
-  { 0x1.24p-1f, -0x1.f8c28p+6f, 0x1.ea17e8p-14f, 0.0f },  /*  95  r =  73/128 */
-  { 0x1.24p-1f, -0x1.f8c28p+6f, 0x1.ea17e8p-14f, 0.0f },  /*  96  r =  73/128 */
-  { 0x1.24p-1f, -0x1.f8c28p+6f, 0x1.ea17e8p-14f, 0.0f },  /*  97  r =  73/128 */
-  { 0x1.2p-1f, -0x1.f8aep+6f, -0x1.a39fbep-19f, 0.0f },   /*  98  r =  72/128 */
-  { 0x1.2p-1f, -0x1.f8aep+6f, -0x1.a39fbep-19f, 0.0f },   /*  99  r =  72/128 */
-  { 0x1.2p-1f, -0x1.f8aep+6f, -0x1.a39fbep-19f, 0.0f },   /* 100  r =  72/128 */
-  { 0x1.1cp-1f, -0x1.f8994p+6f, -0x1.74f13cp-14f, 0.0f }, /* 101  r =  71/128 */
-  { 0x1.1cp-1f, -0x1.f8994p+6f, -0x1.74f13cp-14f, 0.0f }, /* 102  r =  71/128 */
-  { 0x1.1cp-1f, -0x1.f8994p+6f, -0x1.74f13cp-14f, 0.0f }, /* 103  r =  71/128 */
-  { 0x1.18p-1f, -0x1.f8848p+6f, 0x1.d3b992p-14f, 0.0f },  /* 104  r =  70/128 */
-  { 0x1.18p-1f, -0x1.f8848p+6f, 0x1.d3b992p-14f, 0.0f },  /* 105  r =  70/128 */
-  { 0x1.18p-1f, -0x1.f8848p+6f, 0x1.d3b992p-14f, 0.0f },  /* 106  r =  70/128 */
-  { 0x1.18p-1f, -0x1.f8848p+6f, 0x1.d3b992p-14f, 0.0f },  /* 107  r =  70/128 */
-  { 0x1.14p-1f, -0x1.f86f4p+6f, 0x1.ef6fd4p-14f, 0.0f },  /* 108  r =  69/128 */
-  { 0x1.14p-1f, -0x1.f86f4p+6f, 0x1.ef6fd4p-14f, 0.0f },  /* 109  r =  69/128 */
-  { 0x1.14p-1f, -0x1.f86f4p+6f, 0x1.ef6fd4p-14f, 0.0f },  /* 110  r =  69/128 */
-  { 0x1.1p-1f, -0x1.f8598p+6f, -0x1.fb7d64p-15f, 0.0f },  /* 111  r =  68/128 */
-  { 0x1.1p-1f, -0x1.f8598p+6f, -0x1.fb7d64p-15f, 0.0f },  /* 112  r =  68/128 */
-  { 0x1.1p-1f, -0x1.f8598p+6f, -0x1.fb7d64p-15f, 0.0f },  /* 113  r =  68/128 */
-  { 0x1.1p-1f, -0x1.f8598p+6f, -0x1.fb7d64p-15f, 0.0f },  /* 114  r =  68/128 */
-  { 0x1.0cp-1f, -0x1.f843cp+6f, 0x1.31d818p-14f, 0.0f },  /* 115  r =  67/128 */
-  { 0x1.0cp-1f, -0x1.f843cp+6f, 0x1.31d818p-14f, 0.0f },  /* 116  r =  67/128 */
-  { 0x1.0cp-1f, -0x1.f843cp+6f, 0x1.31d818p-14f, 0.0f },  /* 117  r =  67/128 */
-  { 0x1.08p-1f, -0x1.f82d8p+6f, 0x1.4b229cp-15f, 0.0f },  /* 118  r =  66/128 */
-  { 0x1.08p-1f, -0x1.f82d8p+6f, 0x1.4b229cp-15f, 0.0f },  /* 119  r =  66/128 */
-  { 0x1.08p-1f, -0x1.f82d8p+6f, 0x1.4b229cp-15f, 0.0f },  /* 120  r =  66/128 */
-  { 0x1.08p-1f, -0x1.f82d8p+6f, 0x1.4b229cp-15f, 0.0f },  /* 121  r =  66/128 */
-  { 0x1.04p-1f, -0x1.f817p+6f, 0x1.8697a4p-14f, 0.0f },   /* 122  r =  65/128 */
-  { 0x1.04p-1f, -0x1.f817p+6f, 0x1.8697a4p-14f, 0.0f },   /* 123  r =  65/128 */
-  { 0x1.04p-1f, -0x1.f817p+6f, 0x1.8697a4p-14f, 0.0f },   /* 124  r =  65/128 */
-  { 0x1.04p-1f, -0x1.f817p+6f, 0x1.8697a4p-14f, 0.0f },   /* 125  r =  65/128 */
-  { 0x1p-1f, -0x1.f8p+6f, 0.0f, 0.0f },                   /* 126  r =  64/128 */
-  { 0x1p-1f, -0x1.f8p+6f, 0.0f, 0.0f },                   /* 127  r =  64/128 */
-};
-
-#endif /* VM32_LOGF_LOG2_CORE_TAB */
-
-#define VM32_LOGF_L2E32_HI	0x1.715476p+0f	/* log2(e) */
-#define VM32_LOGF_L2E32_LO	0x1.4ae0c0p-26f	/* log2(e) - HI */
-#define VM32_LOGF_L2Q0		-0x1.715476p-1f	/* -C1/2 */
-#define VM32_LOGF_L2Q1		 0x1.ec709ep-2f	/*  C1/3 */
-#define VM32_LOGF_L2Q2		-0x1.715476p-2f	/* -C1/4 */
+  (void) fixup;
+  vm32_b_t mbad = VM32_LOGF_BADNORMAL (x, vl);
+  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_SAFE (vl), mbad, vl);
+  vm32_u_t b, off;
+  vm32_f_t kf, m, r, l2f, l1;
+  VM32_LOGF_TAB_RED (b, off, kf, m, xs, vl);
+  VM32_LOGF_TAB_LD (r, l2f, l1, off, vl);
+  vm32_f_t z = VM32_VFMACC_VV (VM32_VFMV_V_F (-1.0f, (vl)), r, m, (vl));
+  vm32_f_t hi = VM32_VFADD_VV (kf, l1, (vl));
+  /* (ph, pl) = hi*ln2 split exactly; ln(1+z) = z + z^2*Q(z) with C1 = 1,
+     so the leading term is z itself and there is no residual to carry.  */
+  vm32_f_t ph = VM32_VFMUL_VF (hi, VM32_LOGF_LN2_HI, (vl));
+  vm32_f_t pl = VM32_VFMSAC_VF (ph, VM32_LOGF_LN2_HI, hi, (vl));
+  vm32_f_t z2 = VM32_VFMUL_VV (z, z, (vl));
+  vm32_f_t q = VM32_VFMACC_VF (VM32_VFMV_V_F (VM32_LOGF_LN2Q0_33, (vl)),
+			       VM32_LOGF_LN2Q1_33, z, (vl));
+  q = VM32_VFMACC_VF (q, VM32_LOGF_LN2Q2_33, z2, (vl));
+  vm32_f_t lo = VM32_VFMACC_VV (
+    VM32_VFMUL_VF (l2f, VM32_LOGF_LN2_HI, (vl)), z2, q, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_LN2_LO_33, hi, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_S33, pl, (vl));
+  vm32_f_t s, se;
+  VM32_LOGF_TWO_SUM (s, se, ph, z, vl);
+  vm32_f_t res = VM32_VFADD_VV (s, VM32_VFMACC_VF (se, VM32_LOGF_IS33, lo,
+						   (vl)), (vl));
+  if (VM32_VFIRST_M (mbad, vl) >= 0)
+    return VM32_KFN (log_fixup) (x, res, mbad, vl, VM32_KFN (log_fix));
+  return res;
+}
 
 /* ---- log1p / log2p1 ------------------------------------------------ */
-
-/* Exceptional lanes: x < -0.94 (bits above -0.94 as x grows more
-   negative; covers -Inf and negative NaN), x >= 2^60 or +Inf/NaN (the
-   unsigned window test), and |x| < 2^-30 (tiny, where x*x would slowly
-   lose precision).  The benchmark domain is [-0.9, 10], comfortably
-   inside.  */
-#define VM32_LOGF_BAD1P(x, vl)						\
-  VM32_VMOR_MM (							\
-    VM32_VMSGEU_VX (							\
-      VM32_VSUB_VX (VM32_VAND_VX (VM32_BITS (x), 0x7fffffff, (vl)),	\
-		    0x30800000u, (vl)),					\
-      0x2d000000u, (vl)),						\
-    VM32_VMSGTU_VX (VM32_BITS (x), 0xbf733333u, (vl)), (vl))
 
 static inline float
 VM32_KFN (log1p_fix) (float x)
@@ -470,21 +457,56 @@ VM32_KFN (log1p) (vm32_f_t x, size_t vl, double (*fixup) (double))
 {
   (void) fixup;
   vm32_b_t mbad = VM32_LOGF_BAD1P (x, vl);
-  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_ONE (vl), mbad, vl);
-  /* Exact 1+x pair, then log(uh) + log1p(ul/uh); ul/uh <= 2^-25 so the
-     series truncates after its quadratic term.  */
-  vm32_f_t uh, ul;
-  VM32_LOGF_TWO_SUM (uh, ul, VM32_LOGF_ONE (vl), xs, vl);
-  vm32_f_t c = VM32_VFDIV_VV (ul, uh, (vl));
-  vm32_f_t h, l;
-  VM32_LOGF_LOG_DD (h, l, uh, vl);
-  vm32_f_t t = VM32_VFADD_VV (l, c, (vl));
-  t = VM32_VFNMSAC_VF (t, 0.5f, VM32_VFMUL_VV (c, c, (vl)), (vl));
-  vm32_f_t r = VM32_VFADD_VV (h, t, (vl));
+  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_SAFE (vl), mbad, vl);
+  /* u = RN(1+x) and the exact residual c = x - (u-1): u + c = 1 + x for
+     every lane (u-1 alone rounds once u >= 2, and that error is the size
+     of the c/u tail itself).  */
+  vm32_f_t u = VM32_VFADD_VF (xs, 1.0f, (vl));
+  vm32_f_t c = VM32_VFSUB_VV (xs, VM32_VFSUB_VF (u, 1.0f, (vl)), (vl));
+  vm32_u_t b = VM32_BITS (u);
+  vm32_u_t off = VM32_VAND_VX (VM32_VSRL_VX (b, 13, (vl)), 0x3f8u, (vl));
+  vm32_f_t kf = VM32_VFCVT_F_X_V (
+    VM32_REINT_U_I (VM32_VSRL_VX (b, 23, (vl))), (vl));
+  /* 2^-k, then m = u*2^-k (exact) and z = r*m - 1 (exact).  */
+  vm32_f_t i2e = VM32_FROM_BITS (VM32_VSUB_VV (
+    VM32_VMV_V_X (0x7f000000u, (vl)), VM32_VAND_VX (b, 0x7f800000u, (vl)),
+    (vl)));
+  vm32_f_t m = VM32_VFMUL_VV (u, i2e, (vl));
+  vm32_f_t r, l2f, l1;
+  VM32_LOGF_TAB_LD (r, l2f, l1, off, vl);
+  vm32_f_t z = VM32_VFMACC_VV (VM32_VFMV_V_F (-1.0f, (vl)), r, m, (vl));
+  /* c/u = q1/(1+z) with q1 = 2^-k * r * c (exact except for one rounding),
+     so log1p (c/u) = q1*(1-z) + O(q1*z^2) -- 2^-38 absolute, far below the
+     final rounding, and the polynomial keeps the exact z.  */
+  vm32_f_t q1 = VM32_VFMUL_VV (VM32_VFMUL_VV (c, i2e, (vl)), r, (vl));
+  vm32_f_t tail = VM32_VFNMSAC_VV (q1, q1, z, (vl));
+  vm32_f_t zp = z;
+  vm32_f_t hi = VM32_VFADD_VV (kf, l1, (vl));
+  vm32_f_t ph = VM32_VFMUL_VF (hi, VM32_LOGF_LN2_HI, (vl));
+  vm32_f_t pl = VM32_VFMSAC_VF (ph, VM32_LOGF_LN2_HI, hi, (vl));
+  vm32_f_t z2 = VM32_VFMUL_VV (zp, zp, (vl));
+  vm32_f_t q = VM32_VFMACC_VF (VM32_VFMV_V_F (VM32_LOGF_LN2Q0_33, (vl)),
+			       VM32_LOGF_LN2Q1_33, zp, (vl));
+  q = VM32_VFMACC_VF (q, VM32_LOGF_LN2Q2_33, z2, (vl));
+  vm32_f_t lo = VM32_VFMACC_VV (
+    VM32_VFMUL_VF (l2f, VM32_LOGF_LN2_HI, (vl)), z2, q, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_S33, tail, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_LN2_LO_33, hi, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_S33, pl, (vl));
+  vm32_f_t s, se;
+  VM32_LOGF_TWO_SUM (s, se, ph, zp, vl);
+  vm32_f_t res = VM32_VFADD_VV (s, VM32_VFMACC_VF (se, VM32_LOGF_IS33, lo,
+						   (vl)), (vl));
   if (VM32_VFIRST_M (mbad, vl) >= 0)
-    r = VM32_KFN (log1p_fixup) (x, r, mbad, vl, VM32_KFN (log1p_fix));
-  VM32_LOGF_RAISE_UF_SUB (r, vl);
-  return r;
+    {
+      res = VM32_KFN (log1p_fixup) (x, res, mbad, vl, VM32_KFN (log1p_fix));
+      /* Only an epilogue lane can hold a subnormal result: the fast path
+	 covers |x| >= 2^-30, where |log1p (x)| >= 2^-30, so the carrier
+	 never fires on a fast lane and stays off the hot path.  */
+      VM32_LOGF_RAISE_UF_SUB (res, vl);
+      return res;
+    }
+  return res;
 }
 
 static inline vm32_f_t
@@ -492,60 +514,39 @@ VM32_KFN (log2p1) (vm32_f_t x, size_t vl, double (*fixup) (double))
 {
   (void) fixup;
   vm32_b_t mbad = VM32_LOGF_BAD1P (x, vl);
-  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_ONE (vl), mbad, vl);
-  /* u = RN(1+x) and the exact residual c = x - (u-1): the two-sum makes
-     u + c = 1 + x hold for every lane (u-1 alone rounds once u >= 2, and
-     that error is the size of the c/u tail itself).  */
+  vm32_f_t xs = VM32_VFMERGE_VVM (x, VM32_LOGF_SAFE (vl), mbad, vl);
   vm32_f_t u = VM32_VFADD_VF (xs, 1.0f, (vl));
   vm32_f_t c = VM32_VFSUB_VV (xs, VM32_VFSUB_VF (u, 1.0f, (vl)), (vl));
-  /* Table reduction: index = top 7 mantissa bits of u (16-byte stride).  */
   vm32_u_t b = VM32_BITS (u);
-  vm32_u_t off = VM32_VAND_VX (VM32_VSRL_VX (b, 12, (vl)), 0x7f0u, (vl));
-  vm32_f_t r = VM32_VLUXEI32 (&__vm32_log2_core_tab[0].r, off, (vl));
-  vm32_f_t l1 = VM32_VLUXEI32 (&__vm32_log2_core_tab[0].l1, off, (vl));
-  vm32_f_t l2 = VM32_VLUXEI32 (&__vm32_log2_core_tab[0].l2, off, (vl));
-  /* 2^-k, then m = u * 2^-k (exact) and z = r*m - 1 (exact).  */
+  vm32_u_t off = VM32_VAND_VX (VM32_VSRL_VX (b, 13, (vl)), 0x3f8u, (vl));
+  vm32_f_t kf = VM32_VFCVT_F_X_V (
+    VM32_REINT_U_I (VM32_VSRL_VX (b, 23, (vl))), (vl));
   vm32_f_t i2e = VM32_FROM_BITS (VM32_VSUB_VV (
-    VM32_VMV_V_X (0x7f000000u, (vl)), VM32_VAND_VX (b, 0x7f800000, (vl)),
+    VM32_VMV_V_X (0x7f000000u, (vl)), VM32_VAND_VX (b, 0x7f800000u, (vl)),
     (vl)));
   vm32_f_t m = VM32_VFMUL_VV (u, i2e, (vl));
+  vm32_f_t r, l2f, l1;
+  VM32_LOGF_TAB_LD (r, l2f, l1, off, vl);
   vm32_f_t z = VM32_VFMACC_VV (VM32_VFMV_V_F (-1.0f, (vl)), r, m, (vl));
-  /* Fold the 1+x residual into the polynomial argument: with 2^-k * r,
-     1 + zp = 2^-k * r * (1+x) and zp stays O(|x|), so the c/u tail is
-     never added to -- and never cancels against -- the z term.  ez is the
-     exact rounding residual of that fold (a two-sum tail).  */
-  vm32_f_t q0 = VM32_VFMUL_VV (c, i2e, (vl));		/* 2^-k * c, exact */
-  vm32_f_t q1 = VM32_VFMUL_VV (q0, r, (vl));
+  vm32_f_t q1 = VM32_VFMUL_VV (VM32_VFMUL_VV (c, i2e, (vl)), r, (vl));
   vm32_f_t zp = VM32_VFADD_VV (z, q1, (vl));
-  /* exact fold residual: z - zp is exact by Sterbenz whenever |q1| <= |z|,
-     and the q1 = 0 / zp = z cases make both terms zero.  */
   vm32_f_t ez = VM32_VFADD_VV (VM32_VFSUB_VV (z, zp, (vl)), q1, (vl));
-  /* hi = (k + 127) + (l1 - 127) exact: the table stores l1 - 127 so the
-     biased exponent converts straight to a float with no integer subtract.
-     (w, ee) = zp*log2(e) split exactly.  */
-  vm32_f_t hi = VM32_VFADD_VV (
-    VM32_VFCVT_F_X_V (VM32_REINT_U_I (VM32_VSRL_VX (b, 23, (vl))), (vl)),
-    l1, (vl));
+  vm32_f_t hi = VM32_VFADD_VV (kf, l1, (vl));
   vm32_f_t w = VM32_VFMUL_VF (zp, VM32_LOGF_L2E32_HI, (vl));
   vm32_f_t ee = VM32_VFMSAC_VF (w, VM32_LOGF_L2E32_HI, zp, (vl));
-  /* lo = log2(1+zp) - w, one rounding at the end: the z-polynomial plus
-     the log2(e) lo part and the two fold residuals.  */
-  vm32_f_t zp2 = VM32_VFMUL_VV (zp, zp, (vl));
-  vm32_f_t q = VM32_VFMACC_VF (VM32_VFMV_V_F (VM32_LOGF_L2Q1, (vl)),
-			       VM32_LOGF_L2Q2, zp, (vl));
-  q = VM32_VFMACC_VV (VM32_VFMV_V_F (VM32_LOGF_L2Q0, (vl)), zp, q, (vl));
-  vm32_f_t lo = VM32_VFMACC_VV (l2, zp2, q, (vl));
-  lo = VM32_VFMACC_VF (lo, VM32_LOGF_L2E32_LO, zp, (vl));
-  lo = VM32_VFMACC_VF (lo, VM32_LOGF_L2E32_HI, ez, (vl));
-  lo = VM32_VFADD_VV (lo, ee, (vl));
-  /* (s, se) = hi + w exactly, then one final rounding of s + (se + lo).  */
-  vm32_f_t s = VM32_VFADD_VV (hi, w, (vl));
-  vm32_f_t sv = VM32_VFSUB_VV (s, hi, (vl));
-  vm32_f_t se = VM32_VFADD_VV (
-    VM32_VFSUB_VV (hi, VM32_VFSUB_VV (s, sv, (vl)), (vl)),
-    VM32_VFSUB_VV (w, sv, (vl)), (vl));
-  vm32_f_t r2 = VM32_VFADD_VV (s, VM32_VFADD_VV (se, lo, (vl)), (vl));
+  vm32_f_t z2 = VM32_VFMUL_VV (zp, zp, (vl));
+  vm32_f_t q = VM32_VFMACC_VF (VM32_VFMV_V_F (VM32_LOGF_L2Q0_33, (vl)),
+			       VM32_LOGF_L2Q1_33, zp, (vl));
+  q = VM32_VFMACC_VF (q, VM32_LOGF_L2Q2_33, z2, (vl));
+  vm32_f_t lo = VM32_VFMACC_VV (l2f, z2, q, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_L2E32_LO_33, zp, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_L2E32_HI_33, ez, (vl));
+  lo = VM32_VFMACC_VF (lo, VM32_LOGF_S33, ee, (vl));
+  vm32_f_t s, se;
+  VM32_LOGF_TWO_SUM (s, se, hi, w, vl);
+  vm32_f_t res = VM32_VFADD_VV (s, VM32_VFMACC_VF (se, VM32_LOGF_IS33, lo,
+						   (vl)), (vl));
   if (VM32_VFIRST_M (mbad, vl) >= 0)
-    return VM32_KFN (log2p1_fixup) (x, r2, mbad, vl, VM32_KFN (log2p1_fix));
-  return r2;
+    return VM32_KFN (log2p1_fixup) (x, res, mbad, vl, VM32_KFN (log2p1_fix));
+  return res;
 }
