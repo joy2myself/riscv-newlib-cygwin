@@ -38,13 +38,28 @@
      * tanpif/sincospif: exact q = rint(2x), r = x - q/2 (exact in
        binary32), then p = pi*r as a double-float.  The same kernels
        evaluate sin/cos of (p0,p1); |p| <= pi/4.
-     * sinpif/cospif: exact q = rint(x) resp. rint(x+1/2), r = x - q
-       resp. x - (q-1/2), then p = pi*r as a double-float with
-       |p| <= pi/2, so one wide sin kernel plus the quadrant sign is
-       all the fast path needs (VM32_KSIN_HALF).  The wider argument
-       costs one more coefficient and a compensated last Horner step,
-       but saves the whole second polynomial and the two-output
-       quadrant select.
+     * sinpif/cospif: exact q = rint(|x|), r = |x| - q (Sterbenz, so
+       the reduction needs no residual), then p = pi*r as a
+       double-float with |p| <= pi/2, so one wide sin kernel plus the
+       sign is all the fast path needs (VM32_KSIN_HALF).  cospif is the
+       same reduction on the half-shifted argument: it carries
+       t = fl(|x| + 1/2) with te its exact rounding error as a second
+       exact pair, so pi*(|x|+1/2) = pi*(q + r + te) and the tail keeps
+       its full ~2^-45 accuracy; that is two extra vector ops over
+       sinpi and nothing else.  The wider argument costs one more
+       coefficient and a compensated last Horner step, but saves the
+       whole second polynomial and the two-output quadrant select.
+
+       Both reduce the absolute value, which lets the exact cases fall
+       out of the kernel instead of out of a gate (see the note on
+       VM32_PI_RED0/RED1): no zero test, no second sanitisation merge.
+
+       The rounding of q is the one place the whole family used to pay
+       for mode independence: forcing RNE with vfcvt's frm operand
+       writes fcsr twice per strip, which on this core costs more than
+       five vector instructions.  The kernels instead use the
+       fixed-rounding vfcvt.rtz on a biased non-negative quotient --
+       the same trick the binary64 reduction has always used.
 
    The kernels (fdlibm float coefficients from newlib math/kf_sin.c and
    kf_cos.c) are evaluated in f32 double-float arithmetic:
@@ -219,16 +234,21 @@
 				     ksh_zh_, ksh_R_, (vl));		\
   vm32_f_t ksh_Rl_ = VM32_VFMACC_VV (					\
     VM32_VFRSUB_VF (ksh_Rh_, VM32_Q1, (vl)), ksh_zh_, ksh_R_, (vl));	\
+  /* tail: e*cos(u); 1-zh/2+zh^2/24 is within 0.02 over the whole range.	\
+     It sits between the two product chains on purpose: it retires e	\
+     before C/Ce need the last register groups, and it gives the		\
+     in-order core independent work to issue while the R chain's fmas	\
+     are in flight (this file runs with the scheduler off).  */		\
+  vm32_f_t ksh_ct_ = VM32_VFRSUB_VF (					\
+    VM32_VFMUL_VF (ksh_zh_, 1.0f / 24.0f, (vl)), 0.5f, (vl));		\
+  vm32_f_t ksh_ee_ = VM32_VFNMSAC_VV ((e),				\
+    VM32_VFMUL_VV ((e), ksh_zh_, (vl)), ksh_ct_, (vl));			\
   vm32_f_t ksh_C_ = VM32_VFMUL_VV (ksh_v_, ksh_Rh_, (vl));		\
   vm32_f_t ksh_Ce_ = VM32_VFMSAC_VV (ksh_C_, ksh_v_, ksh_Rh_, (vl));	\
   ksh_Ce_ = VM32_VFMACC_VV (ksh_Ce_, ksh_ve_, ksh_Rh_, (vl));		\
   ksh_Ce_ = VM32_VFMACC_VV (ksh_Ce_, ksh_v_, ksh_Rl_, (vl));		\
-  /* tail: e*cos(u); 1-zh/2+zh^2/24 is within 0.02 over the whole range.  */ \
-  vm32_f_t ksh_ct_ = VM32_VFRSUB_VF (					\
-    VM32_VFMUL_VF (ksh_zh_, 1.0f / 24.0f, (vl)), 0.5f, (vl));		\
-  vm32_f_t ksh_ee_ = VM32_VFNMSAC_VV ((e),				\
-    VM32_VFMUL_VV ((e), ksh_zh_, (vl)), ksh_ct_, (vl));		\
-  /* s + se = u + C exactly (|u| > |C|).  */				\
+  /* s + se = u + C exactly (|u| > |C|); the two O(2^-24) tails ride in	\
+     the low word (their own rounding is far below the caller's add).  */ \
   vm32_f_t ksh_s_ = VM32_VFADD_VV ((u), ksh_C_, (vl));			\
   (sho) = ksh_s_;							\
   (slo) = VM32_VFADD_VV (						\
@@ -245,8 +265,9 @@
 #define VM32_TRIG_RED(y0o, y1o, no, x, vl) do {				\
   vm32_f_t vmtr__t = VM32_FROM_BITS (					\
     VM32_VAND_VX (VM32_BITS (x), 0x7fffffffu, (vl)));			\
-  vm32_f_t vmtr__kf = VM32_VFMUL_VF (vmtr__t, VM32_INVPIO2, (vl));	\
-  vm32_i_t vmtr__n = VM32_VFCVT_X_F_V_RM (vmtr__kf, __RISCV_FRM_RNE, (vl)); \
+  vm32_i_t vmtr__n = VM32_VFCVT_RTZ_X_F_V (				\
+    VM32_VFMACC_VF (VM32_VFMV_V_F (0.5f, (vl)), VM32_INVPIO2,		\
+		    vmtr__t, (vl)), (vl));				\
   vm32_f_t vmtr__fn = VM32_VFCVT_F_X_V (vmtr__n, (vl));			\
   vm32_f_t vmtr__z = VM32_VFNMSAC_VF (vmtr__t, VM32_PIO2_HI, vmtr__fn, (vl)); \
   vm32_f_t vmtr__u = VM32_VFNMSAC_VF (vmtr__z, VM32_PIO2_LO, vmtr__fn, (vl)); \
@@ -396,8 +417,7 @@ VM32_KFN (sin) (vm32_f_t x, size_t vl)
   VM32_KSIN_HALF (sh, sl, y0, y1, vl);
   vm32_f_t r = VM32_VFSGNJX_VV (
     VM32_VFADD_VV (sh, sl, vl),
-    VM32_FROM_BITS (VM32_VSLL_VX (
-		      VM32_VAND_VX (VM32_REINT_I_U (n), 1, vl), 31, vl)),
+    VM32_FROM_BITS (VM32_VSLL_VX (VM32_REINT_I_U (n), 31, vl)),
     vl);
   VM32_FAST_OR_WIDE (r, VM32_FALLBACK1 (sin, x, vl), mbad, vl);
   return r;
@@ -469,52 +489,73 @@ VM32_KFN (tan) (vm32_f_t x, size_t vl)
 #define VM32_PI_EXACT_BAD(r, vl)					\
   VM32_VMFEQ_VF ((r), 0.0f, (vl))
 
-/* (p0,p1,q,r) = (pi*r as a double-float, q = rint(x+1/2), r = x - (q-1/2)),
-   with |r| <= 1/2, so that
+/* (p0,p1,q) = (pi*r as a double-float, q = rint(t)) for
+   t = x + 1/2, r = t - q, |r| <= 1/2, so that
 
        cos(pi*x) = sin(pi*(x+1/2)) = (-1)^q * sin(pi*r)
 
-   needs only the one wide sin kernel.  q is taken from the rounded
-   x+1/2: when that rounding crosses a tie, q is off by one and r lands
-   at -+(1/2 -+ eps) instead of +-(1/2 -+ eps), which the (-1)^q factor
-   turns into the same value, so the argument stays inside the minimax
-   range for every lane.  r carries its exact residual re (fast-two-sum;
-   |q-1/2| >= |x| whenever the subtraction is inexact, and it is exact
-   otherwise, so re is always the true residual), hence (p0,p1) keeps
-   the full ~2^-45 tail.  */
-#define VM32_PI_RED1(p0o, p1o, qo, ro, x, vl) do {			\
-  vm32_i_t vmpr1__q = VM32_VFCVT_X_F_V_RM (				\
-    VM32_VFADD_VF ((x), 0.5f, (vl)), __RISCV_FRM_RNE, (vl));		\
-  vm32_f_t vmpr1__m = VM32_VFSUB_VF (					\
-    VM32_VFCVT_F_X_V (vmpr1__q, (vl)), 0.5f, (vl));			\
-  vm32_f_t vmpr1__r = VM32_VFSUB_VV ((x), vmpr1__m, (vl));		\
-  vm32_f_t vmpr1__re = VM32_VFSUB_VV (					\
-    (x), VM32_VFADD_VV (vmpr1__r, vmpr1__m, (vl)), (vl));		\
+   needs only the one wide sin kernel and the same tail as sinpi.  The
+   shift is carried as the exact pair (t, te): t - 1/2 is exact (t is a
+   multiple of ulp(t) and |t - 1/2| < 2^24 ulp(t), so the difference is
+   a representable multiple of ulp(t)), and te = x - (t-1/2) is then the
+   exact rounding error of the sum -- by Sterbenz for |x| >= 1/2, by the
+   fast-two-sum theorem with 1/2 as the larger operand for |x| <= 1/2.
+   The reduction proper is sinpi's Sterbenz form, so the extra cost over
+   sinpi is just the two shift ops.
+
+   te enters the tail to first order: pi*(r+te) = pi*r + pi*te, so
+   p1 += PI_HI*te keeps the full ~2^-45 tail.
+
+   a is |x| (cos is even) and q = trunc(a + 1) is taken with the
+   fixed-rounding conversion, so no fcsr traffic is needed: trunc(a + 1)
+   is rint(a + 1/2) except at exact ties, where it is off by one -- which
+   only flips the sign of r, and the (-1)^q fold turns that into the same
+   value.  At a half-integer a = n + 1/2 the fold can make r = -0; the
+   kernel returns +0 for that, so cospi(n + 1/2) = +0 still holds.  */
+#define VM32_PI_RED1(p0o, p1o, qo, a, vl) do {				\
+  vm32_f_t vmpr1__t = VM32_VFADD_VF ((a), 0.5f, (vl));			\
+  vm32_f_t vmpr1__te = VM32_VFSUB_VV (					\
+    (a), VM32_VFSUB_VF (vmpr1__t, 0.5f, (vl)), (vl));			\
+  vm32_i_t vmpr1__q = VM32_VFCVT_RTZ_X_F_V (				\
+    VM32_VFADD_VF ((a), 1.0f, (vl)), (vl));				\
+  vm32_f_t vmpr1__sg = VM32_FROM_BITS (					\
+    VM32_VSLL_VX (VM32_REINT_I_U (vmpr1__q), 31, (vl)));		\
+  vm32_f_t vmpr1__r = VM32_VFSGNJX_VV (					\
+    VM32_VFSUB_VV (vmpr1__t, VM32_VFCVT_F_X_V (vmpr1__q, (vl)), (vl)),	\
+    vmpr1__sg, (vl));							\
+  vmpr1__te = VM32_VFSGNJX_VV (vmpr1__te, vmpr1__sg, (vl));		\
   vm32_f_t vmpr1__ph = VM32_VFMUL_VF (vmpr1__r, VM32_PI_HI, (vl));	\
   vm32_f_t vmpr1__pl = VM32_VFMACC_VF (					\
-    VM32_VFMACC_VF (VM32_VFMSAC_VF (vmpr1__ph, VM32_PI_HI,		\
+    VM32_VFMACC_VF (VM32_VFMSAC_VF (vmpr1__ph, VM32_PI_HI,			\
 				    vmpr1__r, (vl)),			\
 		    VM32_PI_LO, vmpr1__r, (vl)),			\
-    VM32_PI_HI, vmpr1__re, (vl));					\
+    VM32_PI_HI, vmpr1__te, (vl));					\
   (p0o) = vmpr1__ph;							\
   (p1o) = vmpr1__pl;							\
   (qo) = vmpr1__q;							\
-  (ro) = vmpr1__r;							\
 } while (0)
 
-/* (p0,p1,q,r) = (pi*r as a double-float, q = rint(x), r = x - q), with
+/* (p0,p1,q) = (pi*r as a double-float, q = rint(a)), r = a - q, with
    |r| <= 1/2, so that
 
-       sin(pi*x) = (-1)^q * sin(pi*r)
+       sin(pi*a) = (-1)^q * sin(pi*r)
 
-   needs only the one wide sin kernel.  x - rint(x) is exact in binary32
-   (|x| >= 1 puts both operands within a factor of two -- Sterbenz -- and
-   |x| < 1 gives q = 0 or a Sterbenz-exact 1/2 <= |x| < 1 case), so no
-   residual is needed here.  */
-#define VM32_PI_RED0(p0o, p1o, qo, ro, x, vl) do {			\
-  vm32_i_t vmpr0__q = VM32_VFCVT_X_F_V_RM ((x), __RISCV_FRM_RNE, (vl));	\
-  vm32_f_t vmpr0__r = VM32_VFSUB_VV (					\
-    (x), VM32_VFCVT_F_X_V (vmpr0__q, (vl)), (vl));			\
+   needs only the one wide sin kernel.  a - rint(a) is exact in binary32
+   (|a| >= 1 puts both operands within a factor of two -- Sterbenz -- and
+   |a| < 1 gives q = 0 or a Sterbenz-exact 1/2 <= |a| < 1 case), so no
+   residual is needed here.  a is |x|, already range-gated by the caller:
+   reducing the absolute value leaves only sign(x) for the caller to
+   apply.  The (-1)^q factor is folded into r (sin is odd) rather than
+   into the result, which is what makes the exact cases work without a
+   gate: the kernel returns +0 for r = +-0 regardless of the sign the
+   fold gives it, so sinpi(+-n) = +-0 comes out of the caller's last
+   sign(x) flip with the convention's sign.  */
+#define VM32_PI_RED0(p0o, p1o, qo, a, vl) do {				\
+  vm32_i_t vmpr0__q = VM32_VFCVT_RTZ_X_F_V (				\
+    VM32_VFADD_VF ((a), 0.5f, (vl)), (vl));				\
+  vm32_f_t vmpr0__r = VM32_VFSGNJX_VV (					\
+    VM32_VFSUB_VV ((a), VM32_VFCVT_F_X_V (vmpr0__q, (vl)), (vl)),	\
+    VM32_FROM_BITS (VM32_VSLL_VX (VM32_REINT_I_U (vmpr0__q), 31, (vl))), (vl)); \
   vm32_f_t vmpr0__ph = VM32_VFMUL_VF (vmpr0__r, VM32_PI_HI, (vl));	\
   vm32_f_t vmpr0__pl = VM32_VFMACC_VF (					\
     VM32_VFMSAC_VF (vmpr0__ph, VM32_PI_HI, vmpr0__r, (vl)),		\
@@ -522,7 +563,6 @@ VM32_KFN (tan) (vm32_f_t x, size_t vl)
   (p0o) = vmpr0__ph;							\
   (p1o) = vmpr0__pl;							\
   (qo) = vmpr0__q;							\
-  (ro) = vmpr0__r;							\
 } while (0)
 
 /* range mask + sanitized fast-path input for the pi family.  */
@@ -532,55 +572,70 @@ VM32_KFN (tan) (vm32_f_t x, size_t vl)
   (xso) = VM32_VFMERGE_VFM ((x), 0.5f, (mbado), (vl));			\
 } while (0)
 
-/* sinpi rides the same single-kernel structure: the modulo-1 reduction
-   leaves |pi*r| <= pi/2 and only the sign of the wide sin kernel depends
-   on the quadrant.  */
+/* sinpi/cospi range mask in one compare: |x| is out of [2^-12, 1024]
+   exactly when the biased unsigned difference of its bit pattern wraps
+   above PI_MAX - TINY (out of range on either side, and Inf/NaN, whose
+   patterns are far above both bounds).  The absolute value itself is
+   returned reinterpreted, free of charge.  */
+#define VM32_PI_RANGE(mbado, axo, x, vl) do {				\
+  vm32_u_t vmprg__ax = VM32_VAND_VX (VM32_BITS (x), 0x7fffffffu, (vl));	\
+  (mbado) = VM32_VMSGTU_VX (						\
+    VM32_VSUB_VX (vmprg__ax, VM32_TINY_BITS, (vl)),			\
+    (VM32_PI_MAX - VM32_TINY_BITS), (vl));				\
+  (axo) = VM32_FROM_BITS (vmprg__ax);					\
+} while (0)
+
+/* sinpi and cospi are the same single-kernel structure: the modulo-1
+   (resp. modulo-1-after-a-half-shift) reduction leaves |pi*r| <= pi/2,
+   so one wide sin kernel plus a sign flip is the whole fast path.
+
+   Both reduce the *absolute* argument, which is what lets the exact
+   cases fall out of the kernel instead of out of a gate: the wide sin
+   kernel returns +0 for r = 0 whatever sign the (-1)^q fold gives that
+   zero, so
+     - sinpi(+-n) = +-0 needs only the final sign(x) flip (the sign of a
+       zero result is the one thing the reduction cannot supply), and
+     - cospi(n + 1/2) = +0 needs only that the fold is applied to the
+       reduced argument (which the kernel turns into +0) rather than to
+       the finished result (where it would produce -0).
+   Neither entry therefore tests the reduced argument for zero, and
+   neither needs to sanitize the kernel inputs a second time: the range
+   gate already replaced every bad lane's argument by 0.5, whose
+   reduction (r = 0 resp. r = 1/2) is finite and tiny.  */
 static inline vm32_f_t
 VM32_KFN (sinpi) (vm32_f_t x, size_t vl)
 {
   vm32_b_t mbad;
-  vm32_f_t xs;
-  VM32_PI_PREP (mbad, xs, x, vl);
-  vm32_f_t p0, p1, r;
+  vm32_f_t ax;
+  VM32_PI_RANGE (mbad, ax, x, vl);
+  vm32_f_t a = VM32_VFMERGE_VFM (ax, 0.5f, mbad, vl);
+  vm32_f_t p0, p1;
   vm32_i_t q;
-  VM32_PI_RED0 (p0, p1, q, r, xs, vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_PI_EXACT_BAD (r, vl), vl);
-  p0 = VM32_VFMERGE_VFM (p0, 0.5f, mbad, vl);
-  p1 = VM32_VFMERGE_VFM (p1, 0.0f, mbad, vl);
+  VM32_PI_RED0 (p0, p1, q, a, vl);
   vm32_f_t sh, sl;
   VM32_KSIN_HALF (sh, sl, p0, p1, vl);
-  vm32_f_t out = VM32_VFSGNJX_VV (
-    VM32_VFADD_VV (sh, sl, vl),
-    VM32_FROM_BITS (VM32_VSLL_VX (
-		      VM32_VAND_VX (VM32_REINT_I_U (q), 1, vl), 31, vl)),
-    vl);
+  vm32_f_t out = VM32_VFSGNJX_VV (VM32_VFADD_VV (sh, sl, vl), x, vl);
   VM32_FAST_OR_WIDE (out, VM32_FALLBACK1 (sinpi, x, vl), mbad, vl);
   return out;
 }
 
 /* cospi is the one entry that does not need a sin *and* a cos kernel:
-   the modulo-pi reduction below leaves |pi*r| <= pi/2, and the
+   the half-shifted modulo-pi reduction leaves |pi*r| <= pi/2, and the
    quadrant only flips the sign of the single wide sin kernel, so the
    fast path evaluates one polynomial instead of two.  */
 static inline vm32_f_t
 VM32_KFN (cospi) (vm32_f_t x, size_t vl)
 {
   vm32_b_t mbad;
-  vm32_f_t xs;
-  VM32_PI_PREP (mbad, xs, x, vl);
-  vm32_f_t p0, p1, r;
+  vm32_f_t ax;
+  VM32_PI_RANGE (mbad, ax, x, vl);
+  vm32_f_t a = VM32_VFMERGE_VFM (ax, 0.5f, mbad, vl);
+  vm32_f_t p0, p1;
   vm32_i_t q;
-  VM32_PI_RED1 (p0, p1, q, r, xs, vl);
-  mbad = VM32_VMOR_MM (mbad, VM32_PI_EXACT_BAD (r, vl), vl);
-  p0 = VM32_VFMERGE_VFM (p0, 0.5f, mbad, vl);
-  p1 = VM32_VFMERGE_VFM (p1, 0.0f, mbad, vl);
+  VM32_PI_RED1 (p0, p1, q, a, vl);
   vm32_f_t sh, sl;
   VM32_KSIN_HALF (sh, sl, p0, p1, vl);
-  vm32_f_t out = VM32_VFSGNJX_VV (
-    VM32_VFADD_VV (sh, sl, vl),
-    VM32_FROM_BITS (VM32_VSLL_VX (
-		      VM32_VAND_VX (VM32_REINT_I_U (q), 1, vl), 31, vl)),
-    vl);
+  vm32_f_t out = VM32_VFADD_VV (sh, sl, vl);
   VM32_FAST_OR_WIDE (out, VM32_FALLBACK1 (cospi, x, vl), mbad, vl);
   return out;
 }
