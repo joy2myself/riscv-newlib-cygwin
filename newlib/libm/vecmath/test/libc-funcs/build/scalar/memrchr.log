@@ -1,0 +1,37 @@
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c: In function 'memrchr':
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:82:16: warning: this statement may fall through [-Wimplicit-fallthrough=]
+   82 |             if (*src-- == d) return (void *) (src + 1);
+      |                ^
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:83:11: note: here
+   83 |           case 6:
+      |           ^~~~
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:84:16: warning: this statement may fall through [-Wimplicit-fallthrough=]
+   84 |             if (*src-- == d) return (void *) (src + 1);
+      |                ^
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:85:11: note: here
+   85 |           case 5:
+      |           ^~~~
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:86:16: warning: this statement may fall through [-Wimplicit-fallthrough=]
+   86 |             if (*src-- == d) return (void *) (src + 1);
+      |                ^
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:87:11: note: here
+   87 |           case 4:
+      |           ^~~~
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:88:16: warning: this statement may fall through [-Wimplicit-fallthrough=]
+   88 |             if (*src-- == d) return (void *) (src + 1);
+      |                ^
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:90:11: note: here
+   90 |           case 3:
+      |           ^~~~
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:91:16: warning: this statement may fall through [-Wimplicit-fallthrough=]
+   91 |             if (*src-- == d) return (void *) (src + 1);
+      |                ^
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:92:11: note: here
+   92 |           case 2:
+      |           ^~~~
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:93:16: warning: this statement may fall through [-Wimplicit-fallthrough=]
+   93 |             if (*src-- == d) return (void *) (src + 1);
+      |                ^
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/memrchr.c:94:11: note: here
+   94 |           case 1:
+      |           ^~~~

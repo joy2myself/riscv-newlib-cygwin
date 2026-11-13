@@ -1,0 +1,6 @@
+# RVV string/memory correctness harness
+# VLEN = 256 bits (vlenb=32), page size = 4096
+[PASS] strncat          358986 checks       0 fail     0 warn
+[PASS] strstr           289656 checks       0 fail     0 warn
+
+## VLEN 256 bits: 648642 checks, 0 failures -- PASS

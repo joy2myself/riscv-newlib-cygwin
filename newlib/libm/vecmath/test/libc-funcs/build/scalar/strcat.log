@@ -1,0 +1,6 @@
+In file included from /home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/../../string/strcat.c:32,
+                 from /home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/strcat.c:2:
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/../../string/local.h:1:10: fatal error: _ansi.h: No such file or directory
+    1 | #include <_ansi.h>
+      |          ^~~~~~~~~
+compilation terminated.

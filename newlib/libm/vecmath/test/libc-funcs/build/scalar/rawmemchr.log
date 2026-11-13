@@ -1,0 +1,5 @@
+In file included from /home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/rawmemchr.c:2:
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/../../string/rawmemchr.c:31:10: fatal error: _ansi.h: No such file or directory
+   31 | #include <_ansi.h>
+      |          ^~~~~~~~~
+compilation terminated.

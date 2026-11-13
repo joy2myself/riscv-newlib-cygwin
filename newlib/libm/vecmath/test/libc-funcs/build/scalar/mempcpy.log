@@ -1,0 +1,5 @@
+In file included from /home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/mempcpy.c:2:
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/../../string/mempcpy.c:27:10: fatal error: _ansi.h: No such file or directory
+   27 | #include <_ansi.h>
+      |          ^~~~~~~~~
+compilation terminated.

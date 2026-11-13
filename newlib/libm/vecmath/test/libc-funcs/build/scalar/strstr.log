@@ -1,0 +1,6 @@
+In file included from /home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/../../string/strstr.c:95,
+                 from /home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/strstr.c:2:
+/home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv/../../string/str-two-way.h:34:10: fatal error: _ansi.h: No such file or directory
+   34 | #include <_ansi.h>
+      |          ^~~~~~~~~
+compilation terminated.
