@@ -37,7 +37,7 @@ ENTRY(memmove)
   ret
 
 END(memmove)
-#elif defined(__riscv_vector)
+#elif defined(__riscv_vector) && !defined(__riscv_e)
 ENTRY(memmove)
   beqz   a2, .Ldone_move          /* n == 0 */
   beq    a0, a1, .Ldone_move      /* dst == src */

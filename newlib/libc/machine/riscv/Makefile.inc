@@ -20,6 +20,35 @@ libc_a_SOURCES += \
 	%D%/memset.S \
 	%D%/setjmp.S \
 	%D%/stpcpy.c \
+	%D%/strcasecmp.c \
+	%D%/strcat-asm.S \
+	%D%/strcat.c \
+	%D%/strchr-asm.S \
+	%D%/strchr.c \
+	%D%/strchrnul-asm.S \
+	%D%/strchrnul.c \
+	%D%/strcmp-asm.S \
 	%D%/strcmp.S \
+	%D%/strcpy-asm.S \
 	%D%/strcpy.c \
-	%D%/strlen.c
+	%D%/strcspn-asm.S \
+	%D%/strcspn.c \
+	%D%/strlen-asm.S \
+	%D%/strlen.c \
+	%D%/strncasecmp.c \
+	%D%/strncat-asm.S \
+	%D%/strncat.c \
+	%D%/strncmp-asm.S \
+	%D%/strncmp.c \
+	%D%/strncpy-asm.S \
+	%D%/strncpy.c \
+	%D%/strnlen-asm.S \
+	%D%/strnlen.c \
+	%D%/strpbrk-asm.S \
+	%D%/strpbrk.c \
+	%D%/strrchr-asm.S \
+	%D%/strrchr.c \
+	%D%/strspn-asm.S \
+	%D%/strspn.c \
+	%D%/strstr-asm.S \
+	%D%/strstr.c
