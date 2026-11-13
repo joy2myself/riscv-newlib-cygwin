@@ -27,7 +27,7 @@ TARGETS=${*:-bench}
 CROSS_LINUX=${CROSS_LINUX:-/opt/riscv/bin/riscv64-unknown-linux-gnu-gcc}
 ARCH=${ARCH:--march=rv64gcv -mabi=lp64d}
 JOBS=${JOBS:-6}
-DEFS="-DVECMATH_STANDALONE"
+DEFS="-DVECMATH_STANDALONE -std=gnu23 -D_ISOC23_SOURCE"
 INCS="-I$TESTDIR/include -I$TESTDIR/runner -I$VECDIR/include -I$VECDIR -I$TESTDIR/shim"
 OUT=$TESTDIR/.build/$TAG
 

@@ -25,7 +25,11 @@ QEMU        ?= $(HOME)/qemu-build/qemu-riscv64
 SPIKE       ?= spike
 
 ARCH   ?= -march=rv64gcv -mabi=lp64d
-DEFS   := -DVECMATH_STANDALONE
+# gcc >= 13 defaults to -std=gnu17, and the C23 pi-scaled references
+# (atanpi/atan2pi/asinpi/acospi, used by the scalar fixup paths) are only
+# declared when the C23/GNU feature set is on.  gcc 15 defaults to gnu23 so
+# this was invisible on the cross builds; gcc 14 on the boards is not.
+DEFS   := -DVECMATH_STANDALONE -std=gnu23 -D_ISOC23_SOURCE
 # Not -I$(SRCROOT)/libc/include: that would shadow the toolchain's own
 # <math.h>/<fenv.h> with newlib's.  Only vecmath.h is needed from the source
 # tree, exposed through a shim directory symlink.
