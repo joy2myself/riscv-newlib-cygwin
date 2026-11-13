@@ -28,7 +28,7 @@ ENTRY(memcpy)
 2:
   ret
 END(memcpy)
-#elif defined(__riscv_vector)
+#elif defined(__riscv_vector) && !defined(__riscv_e)
 ENTRY(memcpy)
   mv     t0, a0                   /* t0 = running dst */
   mv     t1, a1                   /* t1 = running src */

@@ -1,6 +1,6 @@
 #include <sys/asm.h>
 
-#if defined(__riscv_vector) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+#if defined(__riscv_vector) && !defined(__riscv_e) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
 ENTRY(mempcpy)
   mv     t0, a0                   /* t0 = running dst */
   mv     t1, a1                   /* t1 = running src */

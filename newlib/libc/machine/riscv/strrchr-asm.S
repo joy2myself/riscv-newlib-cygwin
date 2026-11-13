@@ -1,6 +1,6 @@
 #include <sys/asm.h>
 
-#if defined(__riscv_vector) && __riscv_xlen == 64 && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+#if defined(__riscv_vector) && !defined(__riscv_e) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
 /* char *strrchr(const char *a0, int a1)
    Return the last occurrence of (char)a1 in a0, including the terminating
    NUL when a1==0, else NULL.  Single forward pass: each chunk is loaded with

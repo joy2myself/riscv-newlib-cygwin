@@ -1,6 +1,6 @@
 #include <sys/asm.h>
 
-#if defined(__riscv_vector) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+#if defined(__riscv_vector) && !defined(__riscv_e) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
 ENTRY(memccpy)
   beqz a3, .Lnot_found
   andi a2, a2, 0xff

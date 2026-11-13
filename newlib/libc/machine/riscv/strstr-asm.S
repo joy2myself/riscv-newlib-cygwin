@@ -1,6 +1,6 @@
 #include <sys/asm.h>
 
-#if defined(__riscv_vector) && __riscv_xlen == 64 && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+#if defined(__riscv_vector) && !defined(__riscv_e) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
 /* char *strstr(const char *a0, const char *a1)
    Locate substring a1 in a0.  A vectorized scan (vle8ff, page-boundary safe)
    finds candidate positions of needle[0]; each candidate is verified with a

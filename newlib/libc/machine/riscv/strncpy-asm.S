@@ -1,12 +1,12 @@
 #include <sys/asm.h>
 
-#if defined(__riscv_vector) && __riscv_xlen == 64 && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+#if defined(__riscv_vector) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
 /* char *strncpy(char *a0, const char *a1, size_t a2)
    Copy at most a2 bytes; if a NUL is met in src, the rest of dest is
    zero-filled.  Source is read with vle8ff (page-boundary safe) and vl is
    also capped by the remaining count so we never read past byte a2.  */
 ENTRY(strncpy)
-  mv a3, a0                 /* save dest for return */
+  mv a3, a0                 /* keep a running destination pointer */
   beqz a2, .Ldone
 .Lloop:
   vsetvli zero, a2, e8, m1, ta, ma

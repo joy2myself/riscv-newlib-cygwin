@@ -20,7 +20,6 @@ libc_a_SOURCES += \
 	%D%/memset.S \
 	%D%/setjmp.S \
 	%D%/stpcpy.c \
-	%D%/strcasecmp-asm.S \
 	%D%/strcasecmp.c \
 	%D%/strcat-asm.S \
 	%D%/strcat.c \
@@ -36,7 +35,6 @@ libc_a_SOURCES += \
 	%D%/strcspn.c \
 	%D%/strlen-asm.S \
 	%D%/strlen.c \
-	%D%/strncasecmp-asm.S \
 	%D%/strncasecmp.c \
 	%D%/strncat-asm.S \
 	%D%/strncat.c \

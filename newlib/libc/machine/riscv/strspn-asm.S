@@ -1,6 +1,6 @@
 #include <sys/asm.h>
 
-#if defined(__riscv_vector) && __riscv_xlen == 64 && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+#if defined(__riscv_vector) && !defined(__riscv_e) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
 /* size_t strspn(const char *a0, const char *a1)
    Length of the initial segment of a0 made up entirely of bytes in a1.
    Build a 256-byte "accept" table from a1 (NUL is never marked, since a1 is

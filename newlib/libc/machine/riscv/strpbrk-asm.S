@@ -1,6 +1,6 @@
 #include <sys/asm.h>
 
-#if defined(__riscv_vector) && __riscv_xlen == 64 && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+#if defined(__riscv_vector) && !defined(__riscv_e) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
 /* char *strpbrk(const char *a0, const char *a1)
    Return a pointer to the first byte of a0 that appears in a1, or NULL.
    Equivalent to s + strcspn(s, b), returning NULL when that lands on the
