@@ -430,6 +430,59 @@ VM_KFN (asin_rat) (vm_f_t z, size_t vl)
 } while (0)
 
 
+/* ------------------------------------------------------------------ */
+/* Self-contained scalar pi-scaled references.                        */
+/*                                                                    */
+/* The vector kernels hand the lanes they cannot evaluate to a scalar */
+/* fixup.  For the pi-scaled entries the natural scalar is the C23    */
+/* function (atanpi/atan2pi/asinpi/acospi), but those exist only in   */
+/* glibc >= 2.41: newlib has neither declarations nor implementations */
+/* and older glibc (e.g. 2.39 on musepi) has neither, so depending on */
+/* them makes the library unbuildable as part of newlib and on such   */
+/* hosts.  The two fixup masks turned out to be exactly representable */
+/* (|x| >= 1 for asinpi/acospi, the subnormal quotient for atan2pi),  */
+/* so everything below is self-contained.                            */
+
+/* 1/pi, split so that a * VM_INVPI_HI + a * VM_INVPI_LO reproduces
+   a/pi to within one rounding of the final add.  */
+#define VM_INVPI_HI 0x1.45f306dc9c883p-2
+#define VM_INVPI_LO (-0x1.6b01ec5417056p-56)
+
+/* a / pi with one rounding; the compensation removes the multiply's own
+   error, so the result is as accurate as the base function's result.  */
+static inline double
+vm_div_pi (double a)
+{
+  double p = a * VM_INVPI_HI;
+  double e = fma (a, VM_INVPI_HI, -p) + a * VM_INVPI_LO;
+  return p + e;
+}
+
+/* asinpi fixup: the mask is |x| >= 1, where asinpi is exact (+-0.5 at
+   +-1) or a domain error (NaN + invalid for |x| > 1 and infinities).  */
+static inline double
+vm_asinpi_spec (double x)
+{
+  double ax = __builtin_fabs (x);
+  if (__builtin_isnan (x))
+    return x + x;		/* quiet, no exception */
+  if (ax == 1.0)
+    return __builtin_copysign (0.5, x);
+  return (x - x) / (x - x);	/* |x| > 1 or infinity: NaN + invalid */
+}
+
+/* acospi fixup on the same mask: acospi(1) = +0, acospi(-1) = 1.  */
+static inline double
+vm_acospi_spec (double x)
+{
+  double ax = __builtin_fabs (x);
+  if (__builtin_isnan (x))
+    return x + x;
+  if (ax == 1.0)
+    return x > 0 ? 0.0 : 1.0;
+  return (x - x) / (x - x);
+}
+
 static inline double
 vm_atan_scalar (double x)
 {
@@ -440,7 +493,11 @@ vm_atan_scalar (double x)
 static inline double
 vm_atanpi_scalar (double x)
 {
-  return atanpi (x);
+  if (__builtin_isnan (x))
+    return x + x;
+  if (__builtin_isinf (x))
+    return __builtin_copysign (0.5, x);	/* atanpi (+-inf) = +-0.5 exact */
+  return vm_div_pi (atan (x));
 }
 #define atanpi_scalar vm_atanpi_scalar
 
@@ -454,7 +511,17 @@ vm_atan2_scalar (double y, double x)
 static inline double
 vm_atan2pi_scalar (double y, double x)
 {
-  return atan2pi (y, x);
+  if (__builtin_isnan (y) || __builtin_isnan (x))
+    return y + x;
+  if (__builtin_isinf (y) && __builtin_isinf (x))
+    return __builtin_copysign (x > 0 ? 0.25 : 0.75, y);
+  if (__builtin_isinf (y))
+    return __builtin_copysign (0.5, y);
+  if (y == 0.0)
+    return x > 0 ? __builtin_copysign (0.0, y) : __builtin_copysign (1.0, y);
+  if (__builtin_isinf (x))
+    return __builtin_copysign (x > 0 ? 0.0 : 1.0, y);
+  return vm_div_pi (atan2 (y, x));
 }
 #define atan2pi_scalar vm_atan2pi_scalar
 
@@ -1023,8 +1090,8 @@ VM_KFN (asinpi) (vm_f_t x, size_t vl)
   VM_MUL_INVPI_DD (y, yh, yl, vl);
   y = VM_VFMERGE_VVM (y, VM_VFSGNJ_VV (VM_VFMV_V_F (0.0, (vl)), x, (vl)), \
 		      VM_VMFEQ_VF (x, 0.0, (vl)), (vl));
-  /* scalar fixup supplies asinpi() for |x| >= 1 and non-finite.  */
-  return VM_FIXUP1 (x, y, mspec, vl, asinpi);
+  /* scalar fixup supplies the exact |x| >= 1 / non-finite cases.  */
+  return VM_FIXUP1 (x, y, mspec, vl, vm_asinpi_spec);
 }
 
 static inline vm_f_t
@@ -1036,5 +1103,5 @@ VM_KFN (acospi) (vm_f_t x, size_t vl)
   vm_f_t yh, yl, y;
   VM_ACOS_DD (yh, yl, xs, vl);
   VM_MUL_INVPI_DD (y, yh, yl, vl);
-  return VM_FIXUP1 (x, y, mspec, vl, acospi);
+  return VM_FIXUP1 (x, y, mspec, vl, vm_acospi_spec);
 }
