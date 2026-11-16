@@ -23,6 +23,17 @@
 
 static size_t PG;
 
+/* The page size was declared but never assigned, so every test that guards on
+   "fits in a page" (total > PG with PG == 0) was skipped and chk_buf compared
+   zero bytes: the destination-writing page-boundary cases for strcpy/strncpy/
+   strcat/strncat/memcpy/memmove/memccpy never ran.  Initialise it before main
+   rather than in each entry point so no helper can be reached with PG == 0.  */
+__attribute__ ((constructor)) static void
+pg_setup (void)
+{
+  PG = page_size ();
+}
+
 /* ------------------------------------------------------------------ */
 static void
 edge_pair (int fk, const char *desc, void *p1r, const void *p2r, size_t nr,
@@ -47,22 +58,30 @@ edge_pair (int fk, const char *desc, void *p1r, const void *p2r, size_t nr,
   chk_long (desc, a, b);
 }
 
+/* Run both implementations on separate copies of the buffer and compare the
+   complete destination pages.  src1 and src2 must describe identical data at
+   the same offset relative to d1 and d2 respectively.  Two source pointers
+   are needed for overlapping moves: the RVV call mutates the page that holds
+   its source, so passing that same page to the glibc call would feed glibc
+   already-moved bytes (this was the cause of the bogus memmove failures at
+   n=2 d=1, where the reported rvv=0x00 / glibc=0x30 difference was exactly
+   the second source byte that RVV had written over the first one).  */
 static void
-edge_pair_dst (int fk, const char *desc, unsigned char *d1, unsigned char *d2,
-	       const void *src, size_t n, int c, unsigned char *page1,
-	       unsigned char *page2)
+edge_pair_dst2 (int fk, const char *desc, unsigned char *d1, const void *src1,
+		unsigned char *d2, const void *src2, size_t n, int c,
+		unsigned char *page1, unsigned char *page2)
 {
   int f1 = 0, f2 = 0;
   long a, b;
 
-  a = guard_call (IMPL_RVV, fk, d1, src, n, c, &f1);
+  a = guard_call (IMPL_RVV, fk, d1, src1, n, c, &f1);
   if (f1)
     {
       t_fail ("%s: rvv faulted on the destination guard page "
 	      "(over-write past the page)", desc);
       return;
     }
-  b = guard_call (IMPL_LIBC, fk, d2, src, n, c, &f2);
+  b = guard_call (IMPL_LIBC, fk, d2, src2, n, c, &f2);
   if (f2)
     {
       t_fail ("%s: glibc faulted -- invalid test setup", desc);
@@ -70,6 +89,15 @@ edge_pair_dst (int fk, const char *desc, unsigned char *d1, unsigned char *d2,
     }
   chk_long (desc, a, b);
   chk_buf (desc, page1, page2, PG);
+}
+
+/* Non-overlapping or read-only-source case: one source is enough.  */
+static void
+edge_pair_dst (int fk, const char *desc, unsigned char *d1, unsigned char *d2,
+	       const void *src, size_t n, int c, unsigned char *page1,
+	       unsigned char *page2)
+{
+  edge_pair_dst2 (fk, desc, d1, src, d2, src, n, c, page1, page2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -433,7 +461,14 @@ edge_mempcpy (void) { run_memcpy_like (FK_mempcpy); }
                       backward-copy overrun).
    dir=0 (dst < src): the read range ends exactly at the page end, so a
                       read one byte past src+n faults (the classic
-                      forward-copy overrun).  */
+                      forward-copy overrun).
+
+   Both implementations must work on their own page: unlike the other
+   destination-writing tests, source and destination overlap, so the first
+   call modifies the source that the second call would read.  The two pages
+   are prepared identically (same canary seed, same source data at the same
+   relative offset), hence the full pages must still compare equal after
+   each implementation has done the same move.  */
 static void
 run_memmove (void)
 {
@@ -480,7 +515,8 @@ run_memmove (void)
 		      "memmove n=%zu d=%ld dir=%s shift=%zu", n, d,
 		      dir ? "dst>src" : "dst<src", shift);
 	    t_case ("n=%zu d=%ld dir=%s", n, d, dir ? "fwd" : "bwd");
-	    edge_pair_dst (FK_memmove, label, d1, d2, src1, n, 0, b1, b2);
+	    edge_pair_dst2 (FK_memmove, label, d1, src1, d2, src2, n, 0,
+			    b1, b2);
 	    guard_free (p1);
 	    guard_free (p2);
 	  }

@@ -1,42 +1,82 @@
+/* strncpy, RVV 1.0, v2: aligned vle8.v loads, masked exact stores, m8.
+ *
+ * char *strncpy(char *dst, const char *src, size_t n)
+ *
+ * Bulk: VLMAX bytes per iteration, src aligned to VLMAX so every full load is
+ * inside one page.  vl is capped by the remaining n so the source is never
+ * read further than n bytes.  The store is masked with vmsif (0..nul
+ * inclusive, all ones when the chunk has no NUL) so exactly the bytes the
+ * standard requires are written; the zero fill up to n is written with
+ * unmasked e8/m8 stores whose vl is the exact remainder.
+ */
 #include <sys/asm.h>
 
 #if defined(__riscv_vector) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
-/* char *strncpy(char *a0, const char *a1, size_t a2)
-   Copy at most a2 bytes; if a NUL is met in src, the rest of dest is
-   zero-filled.  Source is read with vle8ff (page-boundary safe) and vl is
-   also capped by the remaining count so we never read past byte a2.  */
+
 ENTRY(strncpy)
-  mv a3, a0                 /* keep a running destination pointer */
-  beqz a2, .Ldone
+  mv      a3, a0                     /* running destination */
+  beqz    a2, .Lret
+  vsetvli t0, zero, e8, m8, ta, ma   /* t0 = VLMAX */
+  neg     t1, t0
+  and     t1, a1, t1
+  add     t1, t1, t0
+  sub     t1, t1, a1                 /* lead */
+  beqz    t1, .Lbulk
+  bltu    a2, t1, .Ltail             /* n < lead: one short chunk */
+
+  /* leading partial chunk, vl = lead (inside one aligned block) */
+  vsetvli zero, t1, e8, m8, ta, ma
+  vle8.v  v8, (a1)
+  vmseq.vi v1, v8, 0
+  vmsif.m v0, v1
+  vse8.v  v8, (a3), v0.t
+  vfirst.m t2, v1
+  bgez    t2, .Lzero
+  add     a1, a1, t1
+  add     a3, a3, t1
+  sub     a2, a2, t1
+  beqz    a2, .Lret
+
+.Lbulk:
+  vsetvli t0, zero, e8, m8, ta, ma
 .Lloop:
-  vsetvli zero, a2, e8, m1, ta, ma
-  vle8ff.v v8, (a1)
-  vmseq.vi v1, v8, 0        /* NUL mask */
-  csrr a4, vl               /* actual count (may be truncated by fault) */
-  vfirst.m a5, v1
-  bgez a5, .Lnul
-  /* no NUL: copy whole chunk */
-  vse8.v v8, (a3)
-  add a1, a1, a4
-  add a3, a3, a4
-  sub a2, a2, a4
-  bnez a2, .Lloop
-  j .Ldone
-.Lnul:
-  /* NUL at index a5: copy the [0,a5) prefix, then zero-fill the rest */
-  vmsbf.m v0, v1            /* mask = elements before first NUL */
-  vse8.v v8, (a3), v0.t
-  add a3, a3, a5
-  sub a2, a2, a5            /* remaining bytes to zero (>=1) */
+  bltu    a2, t0, .Ltail
+  vle8.v  v8, (a1)
+  vmseq.vi v1, v8, 0
+  vmsif.m v0, v1
+  vse8.v  v8, (a3), v0.t
+  vfirst.m t2, v1
+  bgez    t2, .Lzero
+  add     a1, a1, t0
+  add     a3, a3, t0
+  sub     a2, a2, t0
+  bnez    a2, .Lloop
+  ret
+
+.Ltail:
+  vsetvli zero, a2, e8, m8, ta, ma
+  vle8.v  v8, (a1)
+  vmseq.vi v1, v8, 0
+  vmsif.m v0, v1
+  vfirst.m t2, v1
+  vse8.v  v8, (a3), v0.t
+  bltz    t2, .Lret                  /* no NUL: exactly n bytes copied */
+  /* fall through */
+
+  /* NUL at index t2 of a chunk whose vl was a2: zero fill the rest of n */
+.Lzero:
+  addi    t3, t2, 1
+  add     a3, a3, t3
+  sub     a2, a2, t3
+  beqz    a2, .Lret
 .Lfill:
-  beqz a2, .Ldone
-  vsetvli a4, a2, e8, m8, ta, ma
-  vmv.v.i v8, 0
-  vse8.v v8, (a3)
-  add a3, a3, a4
-  sub a2, a2, a4
-  bnez a2, .Lfill
-.Ldone:
+  vsetvli t1, a2, e8, m8, ta, ma
+  vmv.v.i v8, 0                     /* zero at the fill vl, not the chunk vl */
+  vse8.v  v8, (a3)
+  add     a3, a3, t1
+  sub     a2, a2, t1
+  bnez    a2, .Lfill
+.Lret:
   ret
 END(strncpy)
 #endif

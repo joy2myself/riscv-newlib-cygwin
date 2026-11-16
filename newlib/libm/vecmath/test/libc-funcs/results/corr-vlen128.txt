@@ -9,17 +9,17 @@
 [PASS] strncmp         1244180 checks       0 fail     0 warn
 [PASS] strcasecmp       270094 checks       0 fail     0 warn
 [PASS] strncasecmp     1244180 checks       0 fail     0 warn
-[PASS] strcpy            51504 checks       0 fail     0 warn
-[PASS] strncpy          100845 checks       0 fail     0 warn
-[PASS] strcat           122610 checks       0 fail     0 warn
-[PASS] strncat          358986 checks       0 fail     0 warn
+[PASS] strcpy            51652 checks       0 fail     0 warn
+[PASS] strncpy          101881 checks       0 fail     0 warn
+[PASS] strcat           122758 checks       0 fail     0 warn
+[PASS] strncat          360170 checks       0 fail     0 warn
 [PASS] strspn           247128 checks       0 fail     0 warn
 [PASS] strcspn          247128 checks       0 fail     0 warn
 [PASS] strpbrk          247128 checks       0 fail     0 warn
 [PASS] strstr           289656 checks       0 fail     0 warn
 [PASS] memcpy            71802 checks       0 fail     0 warn
 [PASS] mempcpy           71802 checks       0 fail     0 warn
-[PASS] memmove          267348 checks       0 fail     0 warn
+[PASS] memmove          271380 checks       0 fail     0 warn
 [PASS] memccpy          199551 checks       0 fail     0 warn
 [PASS] memchr            43149 checks       0 fail     0 warn
 [PASS] memrchr           43149 checks       0 fail     0 warn
@@ -28,4 +28,4 @@
 [PASS] memset             9192 checks       0 fail     0 warn
 [PASS] scalar(bonus)      5044 checks       0 fail     0 warn
 
-## VLEN 128 bits: 5892628 checks, 0 failures -- PASS
+## VLEN 128 bits: 5899176 checks, 0 failures -- PASS

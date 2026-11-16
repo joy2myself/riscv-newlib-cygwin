@@ -1,0 +1,242 @@
+
+================ correctness, VLEN 128 ================
+# RVV string/memory correctness harness
+# VLEN = 128 bits (vlenb=16), page size = 4096
+[PASS] strlen             3843 checks       0 fail     0 warn
+[PASS] strnlen           25452 checks       0 fail     0 warn
+[PASS] strchr            79125 checks       0 fail     0 warn
+[PASS] strchrnul         79125 checks       0 fail     0 warn
+[PASS] strrchr           79125 checks       0 fail     0 warn
+[PASS] strcmp           270094 checks       0 fail     0 warn
+[PASS] strncmp         1244180 checks       0 fail     0 warn
+[PASS] strcasecmp       270094 checks       0 fail     0 warn
+[PASS] strncasecmp     1244180 checks       0 fail     0 warn
+[PASS] strcpy            51652 checks       0 fail     0 warn
+[PASS] strncpy          101881 checks       0 fail     0 warn
+[PASS] strcat           122758 checks       0 fail     0 warn
+[PASS] strncat          360170 checks       0 fail     0 warn
+[PASS] strspn           247128 checks       0 fail     0 warn
+[PASS] strcspn          247128 checks       0 fail     0 warn
+[PASS] strpbrk          247128 checks       0 fail     0 warn
+[PASS] strstr           289656 checks       0 fail     0 warn
+[PASS] memcpy            71802 checks       0 fail     0 warn
+[PASS] mempcpy           71802 checks       0 fail     0 warn
+[PASS] memmove          271380 checks       0 fail     0 warn
+[PASS] memccpy          199551 checks       0 fail     0 warn
+[PASS] memchr            43149 checks       0 fail     0 warn
+[PASS] memrchr           43149 checks       0 fail     0 warn
+[PASS] rawmemchr         43056 checks       0 fail     0 warn
+[PASS] memcmp           178332 checks       0 fail     0 warn
+[PASS] memset             9192 checks       0 fail     0 warn
+[PASS] scalar(bonus)      5044 checks       0 fail     0 warn
+
+## VLEN 128 bits: 5899176 checks, 0 failures -- PASS
+
+================ correctness, VLEN 256 ================
+# RVV string/memory correctness harness
+# VLEN = 256 bits (vlenb=32), page size = 4096
+[PASS] strlen             3843 checks       0 fail     0 warn
+[PASS] strnlen           25452 checks       0 fail     0 warn
+[PASS] strchr            79125 checks       0 fail     0 warn
+[PASS] strchrnul         79125 checks       0 fail     0 warn
+[PASS] strrchr           79125 checks       0 fail     0 warn
+[PASS] strcmp           270094 checks       0 fail     0 warn
+[PASS] strncmp         1244180 checks       0 fail     0 warn
+[PASS] strcasecmp       270094 checks       0 fail     0 warn
+[PASS] strncasecmp     1244180 checks       0 fail     0 warn
+[PASS] strcpy            51652 checks       0 fail     0 warn
+[PASS] strncpy          101881 checks       0 fail     0 warn
+[PASS] strcat           122758 checks       0 fail     0 warn
+[PASS] strncat          360170 checks       0 fail     0 warn
+[PASS] strspn           247128 checks       0 fail     0 warn
+[PASS] strcspn          247128 checks       0 fail     0 warn
+[PASS] strpbrk          247128 checks       0 fail     0 warn
+[PASS] strstr           289656 checks       0 fail     0 warn
+[PASS] memcpy            71802 checks       0 fail     0 warn
+[PASS] mempcpy           71802 checks       0 fail     0 warn
+[PASS] memmove          271380 checks       0 fail     0 warn
+[PASS] memccpy          199551 checks       0 fail     0 warn
+[PASS] memchr            43149 checks       0 fail     0 warn
+[PASS] memrchr           43149 checks       0 fail     0 warn
+[PASS] rawmemchr         43056 checks       0 fail     0 warn
+[PASS] memcmp           178332 checks       0 fail     0 warn
+[PASS] memset             9192 checks       0 fail     0 warn
+[PASS] scalar(bonus)      5044 checks       0 fail     0 warn
+
+## VLEN 256 bits: 5899176 checks, 0 failures -- PASS
+
+================ throughput, VLEN 128 ================
+# RVV libc function throughput (VLEN = 128 bits)
+# GB/s = bytes per call / time (one direction only); best of 3 rounds after warm-up
+function         size  rvv ns/call glibc ns/call   rvv GB/s glibc GB/s rvv/libc
+memcpy              8       74.412       61.531      0.108      0.130     0.83
+memcpy             16       76.985       63.643      0.208      0.251     0.83
+memcpy             32       72.667       64.225      0.440      0.498     0.88
+memcpy             64       73.790       70.559      0.867      0.907     0.96
+memcpy            128       76.055       73.568      1.683      1.740     0.97
+memcpy            256      119.857       84.210      2.136      3.040     0.70
+memcpy           1024      412.685      109.183      2.481      9.379     0.26
+memcpy           4096     1568.539      247.439      2.611     16.554     0.16
+memcpy          65536    23518.836     4997.367      2.787     13.114     0.21
+memset              8      185.548       50.057      0.043      0.160     0.27
+memset             16      285.745       50.668      0.056      0.316     0.18
+memset             32      186.095       50.920      0.172      0.628     0.27
+memset             64      183.174      126.694      0.349      0.505     0.69
+memset            128      180.369      198.023      0.710      0.646     1.10
+memset            256      205.335      317.686      1.247      0.806     1.55
+memset           1024      374.801     1084.696      2.732      0.944     2.89
+memset           4096     1035.056     4450.588      3.957      0.920     4.30
+memset          65536    14386.219    69576.149      4.555      0.942     4.84
+memmove             8       87.165       57.267      0.092      0.140     0.66
+memmove            16       82.889       85.327      0.193      0.188     1.03
+memmove            32       84.149       86.993      0.380      0.368     1.03
+memmove            64       86.874       88.571      0.737      0.723     1.02
+memmove           128       84.541       93.578      1.514      1.368     1.11
+memmove           256      124.758      100.378      2.052      2.550     0.80
+memmove          1024      377.438      153.267      2.713      6.681     0.41
+memmove          4096     1388.715      367.305      2.949     11.152     0.26
+memmove         65536    21549.688     6358.617      3.041     10.307     0.30
+memcmp              8      107.871       66.262      0.074      0.121     0.61
+memcmp             16      120.840       82.825      0.132      0.193     0.69
+memcmp             32      171.114       85.745      0.187      0.373     0.50
+memcmp             64      235.165      113.962      0.272      0.562     0.48
+memcmp            128      426.056      158.131      0.300      0.809     0.37
+memcmp            256      785.368      273.317      0.326      0.937     0.35
+memcmp           1024     3025.150      885.896      0.338      1.156     0.29
+memcmp           4096    12437.867     3216.262      0.329      1.274     0.26
+memcmp          65536   196105.906    52640.180      0.334      1.245     0.27
+strlen              8      186.146       50.233      0.043      0.159     0.27
+strlen             16      181.901       49.086      0.088      0.326     0.27
+strlen             32      327.898       49.493      0.098      0.647     0.15
+strlen             64      521.809       53.045      0.123      1.207     0.10
+strlen            128      819.855       56.936      0.156      2.248     0.07
+strlen            256     1544.673       75.537      0.166      3.389     0.05
+strlen           1024     5387.489      165.758      0.190      6.178     0.03
+strlen           4096    20599.313      439.596      0.199      9.318     0.02
+strlen          65536   343425.102     6167.219      0.191     10.627     0.02
+strcmp              8      206.675       50.977      0.039      0.157     0.25
+strcmp             16      418.034       51.341      0.038      0.312     0.12
+strcmp             32      627.050       53.193      0.051      0.602     0.08
+strcmp             64     1032.458       58.961      0.062      1.085     0.06
+strcmp            128     1779.215       75.483      0.072      1.696     0.04
+strcmp            256     3416.482       93.719      0.075      2.732     0.03
+strcmp           1024    12962.105      234.433      0.079      4.368     0.02
+strcmp           4096    50694.466      750.688      0.081      5.456     0.01
+strcmp          65536   805856.625    11465.812      0.081      5.716     0.01
+strchr              8      161.485       64.547      0.050      0.124     0.40
+strchr             16      189.174       68.904      0.085      0.232     0.36
+strchr             32      353.222       71.531      0.091      0.447     0.20
+strchr             64      652.156       70.319      0.098      0.910     0.11
+strchr            128     1280.917       80.502      0.100      1.590     0.06
+strchr            256     2540.767       99.873      0.101      2.563     0.04
+strchr           1024     9874.054      207.122      0.104      4.944     0.02
+strchr           4096    40243.124      690.931      0.102      5.928     0.02
+strchr          65536   640740.891     9506.359      0.102      6.894     0.01
+strstr              8      194.470       80.156      0.041      0.100     0.41
+strstr             16      363.097       78.652      0.044      0.203     0.22
+strstr             32      517.032       78.397      0.062      0.408     0.15
+strstr             64      813.676       83.332      0.079      0.768     0.10
+strstr            128     1458.854       91.372      0.088      1.401     0.06
+strstr            256     2692.167      116.171      0.095      2.204     0.04
+strstr           1024    10038.649      222.467      0.102      4.603     0.02
+strstr           4096    43130.533     3028.225      0.095      1.353     0.07
+strstr          65536   649920.344    44417.398      0.101      1.475     0.07
+strstr-cand         8     1396.594       83.758      0.006      0.096     0.06
+strstr-cand        16     2550.476       92.457      0.006      0.173     0.04
+strstr-cand        32     4835.422      110.168      0.007      0.290     0.02
+strstr-cand        64     9440.781      156.309      0.007      0.409     0.02
+strstr-cand       128    19444.418      222.766      0.007      0.575     0.01
+strstr-cand       256    36673.363      360.953      0.007      0.709     0.01
+strstr-cand      1024   149935.785     1214.887      0.007      0.843     0.01
+strstr-cand      4096   619691.199     4751.418      0.007      0.862     0.01
+
+# rvv slower than glibc (ratio < 1.00): memcpy/8(0.83) memcpy/16(0.83) memcpy/32(0.88) memcpy/64(0.96) memcpy/128(0.97) memcpy/256(0.70) memcpy/1024(0.26) memcpy/4096(0.16) memcpy/65536(0.21) memset/8(0.27) memset/16(0.18) memset/32(0.27) memset/64(0.69) memmove/8(0.66) memmove/256(0.80) memmove/1024(0.41) memmove/4096(0.26) memmove/65536(0.30) memcmp/8(0.61) memcmp/16(0.69) memcmp/32(0.50) memcmp/64(0.48) memcmp/128(0.37) memcmp/256(0.35) memcmp/1024(0.29) memcmp/4096(0.26) memcmp/65536(0.27) strlen/8(0.27) strlen/16(0.27) strlen/32(0.15) strlen/64(0.10) strlen/128(0.07) strlen/256(0.05) strlen/1024(0.03) strlen/4096(0.02) strlen/65536(0.02) strcmp/8(0.25) strcmp/16(0.12) strcmp/32(0.08) strcmp/64(0.06) strcmp/128(0.04) strcmp/256(0.03) strcmp/1024(0.02) strcmp/4096(0.01) strcmp/65536(0.01) strchr/8(0.40) strchr/16(0.36) strchr/32(0.20) strchr/64(0.11) strchr/128(0.06) strchr/256(0.04) strchr/1024(0.02) strchr/4096(0.02) strchr/65536(0.01) strstr/8(0.41) strstr/16(0.22) strstr/32(0.15) strstr/64(0.10) strstr/128(0.06) strstr/256(0.04) strstr/1024(0.02) strstr/4096(0.07) strstr/65536(0.07) strstr-cand/8(0.06) strstr-cand/16(0.04) strstr-cand/32(0.02) strstr-cand/64(0.02) strstr-cand/128(0.01) strstr-cand/256(0.01) strstr-cand/1024(0.01) strstr-cand/4096(0.01)
+
+================ throughput, VLEN 256 ================
+# RVV libc function throughput (VLEN = 256 bits)
+# GB/s = bytes per call / time (one direction only); best of 3 rounds after warm-up
+function         size  rvv ns/call glibc ns/call   rvv GB/s glibc GB/s rvv/libc
+memcpy              8       80.737       62.239      0.099      0.129     0.77
+memcpy             16       77.592       62.403      0.206      0.256     0.80
+memcpy             32       75.552       63.002      0.424      0.508     0.83
+memcpy             64       76.434       70.541      0.837      0.907     0.92
+memcpy            128       75.602       73.482      1.693      1.742     0.97
+memcpy            256       80.691       77.921      3.173      3.285     0.97
+memcpy           1024      228.497      110.616      4.481      9.257     0.48
+memcpy           4096      784.190      235.615      5.223     17.384     0.30
+memcpy          65536    12008.125     4796.992      5.458     13.662     0.40
+memset              8       75.983       48.927      0.105      0.164     0.64
+memset             16       77.560       51.362      0.206      0.312     0.66
+memset             32       86.611       49.814      0.369      0.642     0.58
+memset             64       77.487      128.013      0.826      0.500     1.65
+memset            128       79.363      198.679      1.613      0.644     2.50
+memset            256       74.584      324.838      3.432      0.788     4.36
+memset           1024      155.358     1155.836      6.591      0.886     7.44
+memset           4096      512.215     4286.070      7.997      0.956     8.37
+memset          65536     7473.906    70399.055      8.769      0.931     9.42
+memmove             8       91.523       55.780      0.087      0.143     0.61
+memmove            16       89.343       86.917      0.179      0.184     0.97
+memmove            32       88.975       85.464      0.360      0.374     0.96
+memmove            64       86.449       89.607      0.740      0.714     1.04
+memmove           128       88.186       90.583      1.451      1.413     1.03
+memmove           256       83.393      102.502      3.070      2.498     1.23
+memmove          1024      230.421      164.088      4.444      6.241     0.71
+memmove          4096      761.087      378.463      5.382     10.823     0.50
+memmove         65536    11273.812     6488.148      5.813     10.101     0.58
+memcmp              8      106.560       68.787      0.075      0.116     0.65
+memcmp             16      122.936       86.960      0.130      0.184     0.71
+memcmp             32      175.017       88.318      0.183      0.362     0.50
+memcmp             64      243.219      112.770      0.263      0.568     0.46
+memcmp            128      420.183      160.344      0.305      0.798     0.38
+memcmp            256      772.186      327.217      0.332      0.782     0.42
+memcmp           1024     2856.316      866.955      0.359      1.181     0.30
+memcmp           4096    11331.192     3237.432      0.361      1.265     0.29
+memcmp          65536   190896.156    52646.360      0.343      1.245     0.28
+strlen              8      234.314       48.910      0.034      0.164     0.21
+strlen             16      225.358       49.617      0.071      0.322     0.22
+strlen             32      252.988       49.388      0.126      0.648     0.20
+strlen             64      456.540       52.016      0.140      1.230     0.11
+strlen            128      696.319       56.833      0.184      2.252     0.08
+strlen            256     1199.387       75.060      0.213      3.411     0.06
+strlen           1024     4046.559      151.648      0.253      6.752     0.04
+strlen           4096    14962.846      460.395      0.274      8.897     0.03
+strlen          65536   241229.992     6998.688      0.272      9.364     0.03
+strcmp              8      288.256       51.650      0.028      0.155     0.18
+strcmp             16      278.810       51.984      0.057      0.308     0.19
+strcmp             32      601.007       53.505      0.053      0.598     0.09
+strcmp             64      895.207       60.356      0.071      1.060     0.07
+strcmp            128     1519.338       75.302      0.084      1.700     0.05
+strcmp            256     2620.295      124.816      0.098      2.051     0.05
+strcmp           1024     9169.947      225.178      0.112      4.548     0.02
+strcmp           4096    35969.198      781.408      0.114      5.242     0.02
+strcmp          65536   571408.773    11366.672      0.115      5.766     0.02
+strchr              8      223.550       64.430      0.036      0.124     0.29
+strchr             16      242.536       65.825      0.066      0.243     0.27
+strchr             32      269.927       67.552      0.119      0.474     0.25
+strchr             64      535.177       75.757      0.120      0.845     0.14
+strchr            128     1023.685       81.586      0.125      1.569     0.08
+strchr            256     2093.939      103.007      0.122      2.485     0.05
+strchr           1024     8200.119      215.728      0.125      4.747     0.03
+strchr           4096    31833.525      686.791      0.129      5.964     0.02
+strchr          65536   521329.930     9720.461      0.126      6.742     0.02
+strstr              8      279.335       78.253      0.029      0.102     0.28
+strstr             16      286.048       79.311      0.056      0.202     0.28
+strstr             32      535.587       79.918      0.060      0.400     0.15
+strstr             64      810.489       83.734      0.079      0.764     0.10
+strstr            128     1310.180       90.647      0.098      1.412     0.07
+strstr            256     2323.502      116.634      0.110      2.195     0.05
+strstr           1024     8312.177      220.284      0.123      4.649     0.03
+strstr           4096    34062.321     3055.872      0.120      1.340     0.09
+strstr          65536   560111.781    45973.133      0.117      1.426     0.08
+strstr-cand         8     2024.426       88.715      0.004      0.090     0.04
+strstr-cand        16     3741.203       98.387      0.004      0.163     0.03
+strstr-cand        32     7755.270      113.863      0.004      0.281     0.01
+strstr-cand        64    14280.746      152.582      0.004      0.419     0.01
+strstr-cand       128    28841.223      217.078      0.004      0.590     0.01
+strstr-cand       256    59667.512      384.949      0.004      0.665     0.01
+strstr-cand      1024   240707.941     1215.109      0.004      0.843     0.01
+strstr-cand      4096   960469.016     4638.406      0.004      0.883     0.00
+
+# rvv slower than glibc (ratio < 1.00): memcpy/8(0.77) memcpy/16(0.80) memcpy/32(0.83) memcpy/64(0.92) memcpy/128(0.97) memcpy/256(0.97) memcpy/1024(0.48) memcpy/4096(0.30) memcpy/65536(0.40) memset/8(0.64) memset/16(0.66) memset/32(0.58) memmove/8(0.61) memmove/16(0.97) memmove/32(0.96) memmove/1024(0.71) memmove/4096(0.50) memmove/65536(0.58) memcmp/8(0.65) memcmp/16(0.71) memcmp/32(0.50) memcmp/64(0.46) memcmp/128(0.38) memcmp/256(0.42) memcmp/1024(0.30) memcmp/4096(0.29) memcmp/65536(0.28) strlen/8(0.21) strlen/16(0.22) strlen/32(0.20) strlen/64(0.11) strlen/128(0.08) strlen/256(0.06) strlen/1024(0.04) strlen/4096(0.03) strlen/65536(0.03) strcmp/8(0.18) strcmp/16(0.19) strcmp/32(0.09) strcmp/64(0.07) strcmp/128(0.05) strcmp/256(0.05) strcmp/1024(0.02) strcmp/4096(0.02) strcmp/65536(0.02) strchr/8(0.29) strchr/16(0.27) strchr/32(0.25) strchr/64(0.14) strchr/128(0.08) strchr/256(0.05) strchr/1024(0.03) strchr/4096(0.02) strchr/65536(0.02) strstr/8(0.28) strstr/16(0.28) strstr/32(0.15) strstr/64(0.10) strstr/128(0.07) strstr/256(0.05) strstr/1024(0.03) strstr/4096(0.09) strstr/65536(0.08) strstr-cand/8(0.04) strstr-cand/16(0.03) strstr-cand/32(0.01) strstr-cand/64(0.01) strstr-cand/128(0.01) strstr-cand/256(0.01) strstr-cand/1024(0.01) strstr-cand/4096(0.00)
+
+== results in /home/wpcwzy/newlib/.wtr/newlib/libm/vecmath/test/libc-funcs/results

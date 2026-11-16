@@ -1,59 +1,112 @@
+/* strncasecmp - RVV 1.0 candidate v2: vector-first, no vle8ff.
+ *
+ *   int strncasecmp (const char *a, const char *b, size_t n)
+ *
+ * Same ASCII-only fold and chunk body as strcasecmp-v2, with vl additionally
+ * capped by the remaining count so no byte at or after a+n / b+n is touched.
+ * Exhausting n without a NUL or difference returns 0.
+ *
+ * Page safety: vl = min(n_left, distance-to-a's-page, distance-to-b's-page);
+ * vsetvli returns the clamped vl in t2 and both pointers advance by it.
+ * No vle8ff, no backwards read, no read past n.
+ */
 #include <sys/asm.h>
 
-#if defined(__riscv_vector) && __riscv_xlen == 64 && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
-/* int strncasecmp(const char *a0, const char *a1, size_t a2)
-   Case-insensitive compare of at most a2 bytes.  vle8ff keeps loads from
-   crossing a page boundary; vl is also capped by the remaining count so we
-   never read past the n-th byte.  The case folding covers the ASCII letters
-   A-Z only (the C/POSIX locale).  */
+#if defined(__riscv_vector) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+
+.macro FOLD_SCALAR reg, tmp
+  addi  \tmp, \reg, -65
+  sltiu \tmp, \tmp, 26
+  slli  \tmp, \tmp, 5
+  add   \reg, \reg, \tmp
+.endm
+
 ENTRY(strncasecmp)
-  beqz a2, .Lzero
-  li t0, 65            /* 'A' */
-  li t1, 26
-  li t2, 32
-.Lloop:
-  vsetvli zero, a2, e8, m1, ta, mu
-  vle8ff.v v8, (a0)
-  vle8ff.v v16, (a1)
-  csrr a3, vl
-  /* fold left */
-  vsub.vx v24, v8, t0
-  vmsltu.vx v0, v24, t1
-  vadd.vx v8, v8, t2, v0.t
-  /* fold right */
-  vsub.vx v24, v16, t0
-  vmsltu.vx v0, v24, t1
-  vadd.vx v16, v16, t2, v0.t
-  /* NUL in left or mismatch */
+  li       a5, 65                 /* 'A' */
+  li       a6, 26                 /* alphabet size */
+  li       a7, 32                 /* case bit */
+  beqz     a2, .Lzero
+  mv       a3, a2                 /* bytes left                         */
+  li       t6, 4095
+  li       t5, 4096
+  li       t4, 64
+
+  and      t0, a0, t6
+  sub      t0, t5, t0
+  and      t1, a1, t6
+  sub      t1, t5, t1
+  bgeu     t1, t0, 1f
+  mv       t0, t1
+1:
+  bgeu     t0, t4, 2f
+  mv       t4, t0
+2:
+  bgeu     a3, t4, 3f
+  mv       t4, a3
+3:
+  vsetvli  t2, t4, e8, m4, ta, mu
+  vle8.v   v8, (a0)
+  vle8.v   v16, (a1)
+  vsub.vx  v24, v8, a5
+  vmsltu.vx v0, v24, a6
+  vadd.vx  v8, v8, a7, v0.t
+  vsub.vx  v24, v16, a5
+  vmsltu.vx v0, v24, a6
+  vadd.vx  v16, v16, a7, v0.t
+  vmsne.vv v0, v8, v16
   vmseq.vi v1, v8, 0
-  vmsne.vv v2, v8, v16
-  vmor.mm v1, v1, v2
-  sub a2, a2, a3
-  vfirst.m a4, v1
-  bgez a4, .Lend
-  add a0, a0, a3
-  add a1, a1, a3
-  bnez a2, .Lloop
-  /* exhausted n with no NUL/diff: all compared bytes were equal -> 0 */
-  li a0, 0
+  vmor.mm  v0, v0, v1
+  vfirst.m t0, v0
+  add      a0, a0, t2
+  add      a1, a1, t2
+  sub      a3, a3, t2
+  bgez     t0, .Lhit
+  beqz     a3, .Lzero
+
+.Lbig_loop:
+  and      t0, a0, t6
+  sub      t0, t5, t0
+  and      t1, a1, t6
+  sub      t1, t5, t1
+  bgeu     t1, t0, 4f
+  mv       t0, t1
+4:
+  bgeu     a3, t0, 5f
+  mv       t0, a3
+5:
+  vsetvli  t2, t0, e8, m8, ta, mu
+  vle8.v   v8, (a0)
+  vle8.v   v16, (a1)
+  vsub.vx  v24, v8, a5
+  vmsltu.vx v0, v24, a6
+  vadd.vx  v8, v8, a7, v0.t
+  vsub.vx  v24, v16, a5
+  vmsltu.vx v0, v24, a6
+  vadd.vx  v16, v16, a7, v0.t
+  vmsne.vv v0, v8, v16
+  vmseq.vi v1, v8, 0
+  vmor.mm  v0, v0, v1
+  vfirst.m t0, v0
+  add      a0, a0, t2
+  add      a1, a1, t2
+  sub      a3, a3, t2
+  bltz     t0, 6f
+.Lhit:
+  sub      a0, a0, t2
+  sub      a1, a1, t2
+  add      a0, a0, t0
+  add      a1, a1, t0
+  lbu      t0, 0(a0)
+  lbu      t1, 0(a1)
+  FOLD_SCALAR t0, t2
+  FOLD_SCALAR t1, t2
+  sub      a0, t0, t1
   ret
-.Lend:
-  add a0, a0, a4
-  add a1, a1, a4
-  lbu a4, 0(a0)
-  lbu a5, 0(a1)
-  addi a6, a4, -65
-  sltiu a6, a6, 26
-  slli a6, a6, 5
-  add a4, a4, a6
-  addi a6, a5, -65
-  sltiu a6, a6, 26
-  slli a6, a6, 5
-  add a5, a5, a6
-  sub a0, a4, a5
-  ret
+6:
+  bnez     a3, .Lbig_loop
 .Lzero:
-  li a0, 0
+  li       a0, 0
   ret
 END(strncasecmp)
+
 #endif

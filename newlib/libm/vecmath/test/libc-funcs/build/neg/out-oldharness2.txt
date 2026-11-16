@@ -1,0 +1,18 @@
+# RVV string/memory correctness harness
+# VLEN = 128 bits (vlenb=16), page size = 4096
+FAIL memmove      n=2 d=1 dir=bwd                                      : memmove n=2 d=1 dir=dst<src shift=0: first differing byte at index 4093: rvv=0x00 glibc=0x30
+FAIL memmove      n=2 d=1 dir=fwd                                      : memmove n=2 d=1 dir=dst>src shift=0: first differing byte at index 4095: rvv=0x30 glibc=0x00
+FAIL memmove      n=2 d=1 dir=bwd                                      : memmove n=2 d=1 dir=dst<src shift=1: first differing byte at index 4092: rvv=0x00 glibc=0x30
+FAIL memmove      n=2 d=1 dir=fwd                                      : memmove n=2 d=1 dir=dst>src shift=1: first differing byte at index 4094: rvv=0x30 glibc=0x00
+FAIL memmove      n=2 d=1 dir=bwd                                      : memmove n=2 d=1 dir=dst<src shift=3: first differing byte at index 4090: rvv=0x00 glibc=0x30
+FAIL memmove      n=2 d=1 dir=fwd                                      : memmove n=2 d=1 dir=dst>src shift=3: first differing byte at index 4092: rvv=0x30 glibc=0x00
+FAIL memmove      n=2 d=1 dir=bwd                                      : memmove n=2 d=1 dir=dst<src shift=7: first differing byte at index 4086: rvv=0x00 glibc=0x30
+FAIL memmove      n=2 d=1 dir=fwd                                      : memmove n=2 d=1 dir=dst>src shift=7: first differing byte at index 4088: rvv=0x30 glibc=0x00
+FAIL memmove      n=2 d=1 dir=bwd                                      : memmove n=2 d=1 dir=dst<src shift=8: first differing byte at index 4085: rvv=0x00 glibc=0x30
+FAIL memmove      n=2 d=1 dir=fwd                                      : memmove n=2 d=1 dir=dst>src shift=8: first differing byte at index 4087: rvv=0x30 glibc=0x00
+FAIL memmove      n=2 d=1 dir=bwd                                      : memmove n=2 d=1 dir=dst<src shift=15: first differing byte at index 4078: rvv=0x00 glibc=0x30
+FAIL memmove      n=2 d=1 dir=fwd                                      : memmove n=2 d=1 dir=dst>src shift=15: first differing byte at index 4080: rvv=0x30 glibc=0x00
+     memmove      (further failures for this function elided)
+[FAIL] memmove          271380 checks    1440 fail     0 warn
+
+## VLEN 128 bits: 271380 checks, 1440 failures -- FAIL

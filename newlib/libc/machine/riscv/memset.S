@@ -60,22 +60,55 @@ ENTRY(memset)
 #elif defined(__riscv_vector)
 .option push
 .option arch, +zve32x
-  mv     t0, a0                    /* running dst; keep a0 as return */
-  beqz   a2, .Ldone_set            /* n == 0 then return */
-
-  /* Broadcast fill byte once. */
-  vsetvli t1, zero, e8, m8, ta, ma
-  vmv.v.x v0, a1
-
-.Lbulk_set:
-  vsetvli t1, a2, e8, m8, ta, ma   /* t1 = vl (bytes) */
-  vse8.v v0, (t0)
-  add    t0, t0, t1
-  sub    a2, a2, t1
-  bnez   a2, .Lbulk_set
-.Ldone_set:
-  ret
+	mv	t0, a0
+	beqz	a2, .Lret
+	li	t3, 8
+	bltu	a2, t3, .Ltiny
+	li	t3, 17
+	bltu	a2, t3, .Lsw16		/* 8..16: 4 scalar stores, no vsetvli */
+	vsetvli	t2, a2, e8, m8, ta, ma
+	vmv.v.x	v0, a1
+	bltu	a2, t2, .Lone
+1:	vse8.v	v0, (t0)
+	add	t0, t0, t2
+	sub	a2, a2, t2
+	bgeu	a2, t2, 1b
+	beqz	a2, .Lret
+1:	bltu	a2, t2, .Ltail
+	vse8.v	v0, (t0)
+	add	t0, t0, t2
+	sub	a2, a2, t2
+	beqz	a2, .Lret
+	j	1b
+.Ltail:
+	add	t0, t0, a2		/* last full strip, overlapping */
+	sub	t0, t0, t2
+	vse8.v	v0, (t0)
+	ret
+.Lone:
+	vse8.v	v0, (t0)
+.Lret:
+	ret
+.Lsw16:				/* 8 <= n <= 16 */
+	andi	a1, a1, 0xff
+	slli	t1, a1, 8
+	or	a1, a1, t1
+	slli	t1, a1, 16
+	or	a1, a1, t1		/* 32-bit splat */
+	sw	a1, 0(t0)
+	sw	a1, 4(t0)
+	add	t1, t0, a2
+	sw	a1, -8(t1)
+	sw	a1, -4(t1)
+	ret
+.Ltiny:
+1:	sb	a1, 0(t0)
+	addi	t0, t0, 1
+	addi	a2, a2, -1
+	bnez	a2, 1b
+	ret
   .option pop
+
 #else
   li     REG_TABLE, BYTE_TBL_SZ
   mv     a3, a0

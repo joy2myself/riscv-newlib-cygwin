@@ -95,32 +95,65 @@ test_mempcpy (void)
 /* memmove                                                            */
 /* ------------------------------------------------------------------ */
 /* One overlapping (or not) move inside a region.  Both regions get
-   identical content, so the whole window can be compared afterwards.  */
+   identical content, so the whole window can be compared afterwards.
+
+   The lower of the two objects is placed at base+lead and the higher one
+   dist bytes above it; dir selects which one is the source.  The window
+   starts at base and covers both objects plus the leading canary and at
+   least 272 bytes of trailing canary, all of which exist.  Its length is
+   max(object span, the old n+512 window), so no case compares fewer bytes
+   than before; only the large backward distances grow it, and those are
+   precisely the cases whose destination used to fall outside the window.
+
+   The previous version fixed the source at base+256+sa and computed
+   d1 = s1 + dir*d.  For dir < 0 and d > 256+sa that put the destination
+   below base (for n = 100003, d = n-1: 95 KB below the start of the mmap --
+   merely below the compared window when 256+sa < d < ... and outside the
+   mapping altogether for large d).  Such a test depends on another mapping
+   happening to sit below this one, and its result window did not even
+   include the destination's first bytes.  Shifting the whole pair instead
+   of the source alone keeps every constructed pointer inside the mapping.
+   256+sa keeps the lower object's alignment at sa; the other object is at
+   (256+sa+d) mod 16 = (sa+d) mod 16, and the d sweep varies both objects
+   over all 16 alignments.  */
 static void
 move_one (unsigned char *r1, unsigned char *r2, size_t n, int sa, long d,
 	  int dir, unsigned pat)
 {
   size_t base = WIN_OFF;
-  size_t touch = n + 512;
-  size_t wlen = WIN_LEN (touch);
-  unsigned char *s1 = r1 + base + 256 + sa;
-  unsigned char *s2 = r2 + base + 256 + sa;
-  unsigned char *d1, *d2;
+  size_t lead = 256 + (size_t) sa;
+  size_t dist = (size_t) d;
+  size_t span = lead + dist + n;
+  size_t check = span > n + 512 ? span : n + 512;
+  size_t wlen = WIN_LEN (check);
+  unsigned char *s1, *s2, *d1, *d2;
   long a, b;
+
+  if (dir < 0)
+    {
+      s1 = r1 + base + lead + dist;
+      s2 = r2 + base + lead + dist;
+      d1 = r1 + base + lead;
+      d2 = r2 + base + lead;
+    }
+  else
+    {
+      s1 = r1 + base + lead;
+      s2 = r2 + base + lead;
+      d1 = s1 + dist;
+      d2 = s2 + dist;
+    }
 
   canary_fill (r1 + base, wlen, 31);
   canary_fill (r2 + base, wlen, 31);
   make_data (s1, n, pat);
   make_data (s2, n, pat);
 
-  d1 = s1 + dir * d;
-  d2 = s2 + dir * d;
-
   t_case ("n=%zu sa=%d d=%ld dir=%s", n, sa, d, dir < 0 ? "back" : "fwd");
   a = fcall (IMPL_RVV, FK_memmove, d1, s1, n, 0);
   b = fcall (IMPL_LIBC, FK_memmove, d2, s2, n, 0);
   chk_long ("return", a, b);
-  chk_win ("overlap", r1 + base, r2 + base, touch, 0);
+  chk_win ("overlap", r1 + base, r2 + base, check, 0);
 }
 
 static void

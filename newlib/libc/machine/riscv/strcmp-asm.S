@@ -1,51 +1,84 @@
+/* strcmp - RVV 1.0 candidate v2: vector-first, no vle8ff.
+ *
+ *   int strcmp (const char *a, const char *b)
+ *
+ * Algorithm
+ *   1. One 64-byte probe chunk (e8/m4): two plain loads, vmsne.vv, vmseq.vi
+ *      against zero, vmor.mm, one vfirst.m.
+ *   2. e8/m8 loop, VLMAX bytes per iteration, same body.
+ *   The stop mask is "a[i] != b[i] OR a[i] == 0".  A NUL in b alone is
+ *   covered by the first term because a[i] != 0 there.  On the first hit the
+ *   two original bytes are reloaded and subtracted, so the returned value is
+ *   the unsigned char difference and has the sign the standard requires.
+ *
+ * Page safety
+ *   vl = min(bytes left in a's page, bytes left in b's page), and vsetvli
+ *   with rd != x0 both clamps to VLMAX and returns the real vl in t2; the
+ *   pointers advance by exactly that.  A plain vle8.v therefore never reads
+ *   past either page.  No vle8ff, no backwards reads.
+ *
+ * RV32/RV64: XLEN independent, no stack, no callee-saved registers.
+ */
 #include <sys/asm.h>
 
 #if defined(__riscv_vector) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
+
 ENTRY(strcmp)
-.Lloop:
-  vsetvli a2, zero, e8, m1, ta, ma
-  vle8ff.v v0, (a0)
-  /* check if v0[i] == 0 */
-  vmseq.vx v16, v0, zero
+  li       t6, 4095
+  li       t5, 4096
+  li       t3, 65
 
-  vle8ff.v v8, (a1)
-  /* check if v0[i] != v8[i] */
-  vmsne.vv v17, v0, v8
+  /* 64-byte probe, capped by both page distances */
+  and      t0, a0, t6
+  sub      t0, t5, t0
+  and      t1, a1, t6
+  sub      t1, t5, t1
+  bgeu     t1, t0, 1f
+  mv       t0, t1
+1:
+  bgeu     t0, t3, 2f
+  mv       t3, t0
+2:
+  vsetvli  t2, t3, e8, m8, ta, ma
+  vle8.v   v8, (a0)
+  vle8.v   v16, (a1)
+  vmsne.vv v0, v8, v16
+  vmseq.vi v1, v8, 0
+  vmor.mm  v0, v0, v1
+  vfirst.m t0, v0
+  add      a0, a0, t2
+  add      a1, a1, t2
+  bgez     t0, .Lhit
 
-  /* find the index x for v0[x]==0 */
-  vfirst.m a3, v16
-  /* find the index x for v0[x]!=v8[x] */
-  vfirst.m a4, v17
+  /* ---- streaming e8/m8 loop ---------------------------------------- */
+.Lbig_loop:
+  and      t0, a0, t6
+  sub      t0, t5, t0
+  and      t1, a1, t6
+  sub      t1, t5, t1
+  bgeu     t1, t0, 3f
+  mv       t0, t1
+3:
+  vsetvli  t2, t0, e8, m8, ta, ma
+  vle8.v   v8, (a0)
+  vle8.v   v16, (a1)
+  vmsne.vv v0, v8, v16
+  vmseq.vi v1, v8, 0
+  vmor.mm  v0, v0, v1
+  vfirst.m t0, v0
+  add      a0, a0, t2
+  add      a1, a1, t2
+  bltz     t0, .Lbig_loop
 
-  bgez a3, .Lcheck1
-  bgez a4, .Lcheck2
-
-  /* get the current vl updated by vle8ff. */
-  csrr a2, vl
-  add a0, a0, a2
-  add a1, a1, a2
-  j .Lloop
-
-  /* a3>=0 */
-.Lcheck1:
-  bltz a4, .Lreturn_at_nul
-  blt a4, a3, .Lcheck2
-.Lreturn_at_nul:
-  /* a4<0, or a4>=0 && a3<=a4 */
-  add a0, a0, a3
-  add a1, a1, a3
-  lbu a3, 0(a0)
-  lbu a4, 0(a1)
-  sub a0, a3, a4
-  ret
-
-  /* a3<0 && a4>=0, or a4<a3 */
-.Lcheck2:
-  add a0, a0, a4
-  add a1, a1, a4
-  lbu a3, 0(a0)
-  lbu a4, 0(a1)
-  sub a0, a3, a4
+.Lhit:
+  sub      a0, a0, t2
+  sub      a1, a1, t2
+  add      a0, a0, t0
+  add      a1, a1, t0
+  lbu      t0, 0(a0)
+  lbu      t1, 0(a1)
+  sub      a0, t0, t1
   ret
 END(strcmp)
+
 #endif

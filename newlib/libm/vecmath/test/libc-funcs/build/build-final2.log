@@ -1,0 +1,8 @@
+== assembling RVV routines from /home/wpcwzy/newlib/.wtr/newlib/libc/machine/riscv
+   26 objects -> /home/wpcwzy/newlib/.wtr/newlib/libm/vecmath/test/libc-funcs/build/obj
+== building scalar fallbacks (best effort)
+   12 scalar objects
+== linking /home/wpcwzy/newlib/.wtr/newlib/libm/vecmath/test/libc-funcs/build/corr
+== linking /home/wpcwzy/newlib/.wtr/newlib/libm/vecmath/test/libc-funcs/build/bench
+== done: /home/wpcwzy/newlib/.wtr/newlib/libm/vecmath/test/libc-funcs/build/corr /home/wpcwzy/newlib/.wtr/newlib/libm/vecmath/test/libc-funcs/build/bench
+   next: QEMU=/home/wpcwzy/qemu-build/qemu-riscv64 ./run.sh
