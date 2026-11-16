@@ -432,7 +432,7 @@ fmt_off (char *buf, size_t buflen, long off)
 }
 
 long
-fcall (int impl, int fk, void *p1, const void *p2, size_t n, int c)
+fcall_raw (int impl, int fk, void *p1, const void *p2, size_t n, int c)
 {
   const char *s1 = (const char *) p1;
   const char *s2 = (const char *) p2;
@@ -501,6 +501,28 @@ fcall (int impl, int fk, void *p1, const void *p2, size_t n, int c)
       return ptr_off (impl ? memset (p1, c, n) : rvv_memset (p1, c, n), p1);
     default:
       return 0;
+    }
+}
+
+/* The C standard specifies only the sign of the comparison functions, and a
+   platform libc may normalise the result to +-1 while a byte-difference
+   implementation returns the delta between the differing bytes (e.g.
+   strcmp ("aZ", "aa") is -7 in one and -1 in the other - both are legal).
+   Compare signs so the check tests what the standard actually requires.  */
+long
+fcall (int impl, int fk, void *p1, const void *p2, size_t n, int c)
+{
+  long v = fcall_raw (impl, fk, p1, p2, n, c);
+  switch (fk)
+    {
+    case FK_strcmp:
+    case FK_strncmp:
+    case FK_strcasecmp:
+    case FK_strncasecmp:
+    case FK_memcmp:
+      return (v > 0) - (v < 0);
+    default:
+      return v;
     }
 }
 
