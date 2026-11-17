@@ -1,4 +1,5 @@
-/* strcasecmp - RVV 1.0 candidate v2: vector-first, no vle8ff.
+/* strcasecmp - RVV 1.0 candidate v3: one e8/m1 VLMAX probe chunk then the
+ * e8/m8 loop.  No vle8ff.
  *
  *   int strcasecmp (const char *a, const char *b)
  *
@@ -8,8 +9,11 @@
  * masked lanes are preserved because the vtype is ta,mu.  None of '@', '[',
  * '`', '{', '~' or any 0x80..0xff byte folds.
  *
- * Chunk body: 2 plain loads + 6 fold ops + vmsne.vv + vmseq.vi + vmor.mm +
- * vfirst.m; a 64-byte e8/m4 probe, then an e8/m8 VLMAX loop.
+ * The first chunk uses LMUL=m1 at VLMAX (16/32/64 bytes for VLEN 128/256/
+ * 512) instead of a fixed 64-byte m4 chunk: less vector register pressure
+ * and a shorter latency chain for the 8/16-byte rows, at the cost of one
+ * more iteration for 32-63-byte strings.  Body: 2 plain loads + 6 fold ops
+ * + vmsne.vv + vmseq.vi + vmor.mm + vfirst.m; then an e8/m8 VLMAX loop.
  * vl = min(the two page distances), clamped by VLMAX; the two loads can never
  * cross a page.  On the first hit the original bytes are reloaded and folded
  * scalar-wise, so the returned difference has the standard's sign.
@@ -31,7 +35,6 @@ ENTRY(strcasecmp)
   li       a7, 32                 /* case bit */
   li       t6, 4095
   li       t5, 4096
-  li       t3, 65
 
   and      t0, a0, t6
   sub      t0, t5, t0
@@ -40,10 +43,7 @@ ENTRY(strcasecmp)
   bgeu     t1, t0, 1f
   mv       t0, t1
 1:
-  bgeu     t0, t3, 2f
-  mv       t3, t0
-2:
-  vsetvli  t2, t3, e8, m8, ta, mu
+  vsetvli  t2, t0, e8, m1, ta, mu
   vle8.v   v8, (a0)
   vle8.v   v16, (a1)
   vsub.vx  v24, v8, a5

@@ -1,35 +1,25 @@
-/* strrchr - RVV 1.0 candidate v2: forward vector scan, one bounded scalar
- * rescan of the last chunk that contained c.  No vle8ff.
+/* strrchr - RVV 1.0 candidate v3: two-pass (find the terminator with the
+ * vle8ff-free vector scan, then scan backwards for c with 8-byte scalar
+ * words).  No vle8ff.
  *
  *   char *strrchr (const char *s, int c)
  *
- * Algorithm
- *   1. Forward e8/m8 probe (65 B) then e8/m8 loop, exactly like strlen, but
- *      each chunk also computes the mask of bytes equal to (char)c and, if
- *      it has a hit at or before the terminator, remembers the chunk start
- *      and its length (a4/a5).
- *   2. When the terminator is found, only the *last remembered chunk* can
- *      hold the answer.  It is rescanned backwards with aligned/unaligned
- *      8-byte scalar words (xor + zero-byte trick + a high-to-low bit
- *      ladder).  That rescan is at most one vector chunk of work, so the
- *      call stays O(n) with a tiny constant and no second full pass.
+ * This is the simple alternative to strrchr-v2: no per-chunk c bookkeeping,
+ * so the forward pass is as cheap as strlen, and the backward pass is a
+ * scalar word loop that stops at the first match.  Cost is best when the
+ * last c is close to the end (one or two words) and worst when c is absent
+ * or far away (a second pass at ~1.1 instructions/byte).  v2 is O(1) in
+ * that respect; measure both on the boards.
  *
- *   c == 0 is handled naturally: the terminator itself is the last
- *   occurrence, so the rescan window includes it.
- *
- * Page safety: every forward load uses vl = min(bytes-to-page, VLMAX); the
- * backward rescan only touches [chunk_start, chunk_end) which the forward
- * load already proved to be inside one page.  Nothing before s is read.
- *
- * RV32: the scalar rescan is RV64-specific, so RV32 keeps the previous
- * vector-only implementation (in the #else branch) -- unchanged behaviour.
+ * Page safety: the forward pass caps vl by the page distance; the backward
+ * pass only reads inside [s, terminator], which the forward pass has already
+ * proved mapped, and never goes below s.
  */
 #include <sys/asm.h>
 
 #if defined(__riscv_vector) && !defined(__riscv_e) && !defined(__OPTIMIZE_SIZE__) && !defined(PREFER_SIZE_OVER_SPEED)
 
 #if __riscv_xlen == 64
-/* highest byte index of a 0x80-group mask (mask != 0) */
 .macro RZIDX dst, msk, tmp
   bltz \msk, .Lr7\@
   slli \tmp, \msk, 8
@@ -69,95 +59,85 @@
 .Lre\@:
 .endm
 
-/* load one chunk, update (a4,a5) if it holds a usable c.  Leaves the
-   terminator index in t2 (-1 when none).  \lastlen is the chunk's vl. */
-.macro SCAN_CHUNK lastlen
-  vle8.v   v8, (a0)
-  vmseq.vi v2, v8, 0
-  vfirst.m t2, v2
-  vmseq.vx v1, v8, a1
-  vfirst.m t1, v1
-  bltz     t1, .Lsc_no_c\@
-  bltz     t2, .Lsc_c\@
-  bgt      t1, t2, .Lsc_no_c\@
-.Lsc_c\@:
-  mv       a4, a0
-  mv       a5, \lastlen
-.Lsc_no_c\@:
-.endm
-
 ENTRY(strrchr)
   andi     a1, a1, 255
-  li       a6, 4095
-  li       a3, 4096
-  li       a4, 0
-  li       a5, 0
-  li       t3, 65
-  li       a2, 4096 - 65
-  vsetvli  zero, t3, e8, m8, ta, ma
-  and      t0, a0, a6
-  bgeu     t0, a2, .Lprobe_part
+  mv       a2, a0
+  li       t6, 4095
+  li       t4, 64
+  li       t5, 4096 - 64
+  vsetvli  zero, t4, e8, m4, ta, ma
+  and      t0, a0, t6
+  bgeu     t0, t5, .Lprobe_part
 
-  SCAN_CHUNK t3
-  bgez     t2, .Lfound_nul
-  addi     a0, a0, 65
+  vle8.v   v8, (a0)
+  vmseq.vi v0, v8, 0
+  vfirst.m t0, v0
+  bgez     t0, .Lprobe_hit
+  addi     a0, a0, 64
   j        .Lbig_setup
+.Lprobe_hit:
+  add      a3, a0, t0
+  j        .Lscan_back
 
 .Lprobe_part:
-  sub      t4, a3, t0
-  vsetvli  zero, t4, e8, m8, ta, ma
-  SCAN_CHUNK t4
-  bgez     t2, .Lfound_nul
-  add      a0, a0, t4
-  j        .Lbig_setup
+  li       t1, 4096
+  sub      t1, t1, t0
+  vsetvli  zero, t1, e8, m4, ta, ma
+  vle8.v   v8, (a0)
+  vmseq.vi v0, v8, 0
+  vfirst.m t0, v0
+  add      a0, a0, t1
+  bltz     t0, .Lbig_setup
+  sub      a0, a0, t1
+  add      a3, a0, t0
+  j        .Lscan_back
 
 .Lbig_setup:
-  vsetvli  t3, zero, e8, m8, ta, ma   /* t3 = VLMAX bytes               */
-  li       a2, 4096
-  sub      a2, a2, t3
+  vsetvli  t3, zero, e8, m8, ta, ma
+  li       t5, 4096
+  sub      t5, t5, t3
 .Lbig_loop:
-  and      t0, a0, a6
-  bgeu     t0, a2, .Lbig_part
-  SCAN_CHUNK t3
-  bgez     t2, .Lfound_nul
+  and      t0, a0, t6
+  bgeu     t0, t5, .Lbig_part
+  vle8.v   v8, (a0)
+  vmseq.vi v0, v8, 0
+  vfirst.m t0, v0
+  bgez     t0, .Lbig_hit
   add      a0, a0, t3
   j        .Lbig_loop
-
+.Lbig_hit:
+  add      a3, a0, t0
+  j        .Lscan_back
 .Lbig_part:
-  sub      t4, a3, t0
-  vsetvli  zero, t4, e8, m8, ta, ma
-  SCAN_CHUNK t4
-  bgez     t2, .Lfound_nul
-  add      a0, a0, t4
+  li       t1, 4096
+  sub      t1, t1, t0
+  vsetvli  zero, t1, e8, m8, ta, ma
+  vle8.v   v8, (a0)
+  vmseq.vi v0, v8, 0
+  vfirst.m t0, v0
+  add      a0, a0, t1
+  bltz     t0, .Lbig_restore
+  sub      a0, a0, t1
+  add      a3, a0, t0
+  j        .Lscan_back
+.Lbig_restore:
   vsetvli  t3, zero, e8, m8, ta, ma
   j        .Lbig_loop
 
-  /* ---- terminator found: rescan the last c-chunk backwards ---------- */
-.Lfound_nul:
-  beqz     a4, .Lnull
-  add      t3, a0, t2             /* terminator address                 */
-  add      t4, a4, a5             /* end of the last c-chunk            */
-  beq      a4, a0, 1f
-  mv       t3, t4
-  j        2f
-1:
-  bnez     a1, 2f                 /* c != 0: window ends at the NUL     */
-  addi     t3, t3, 1              /* c == 0: include the NUL            */
-2:
-  /* exact per-byte zero mask (no borrow chain, the high-to-low search
-     must not see the false positives the classic ONES/HIGHS formula
-     leaves above a zero byte):  ~((x&0x7f) + 0x7f | x | 0x7f)          */
-  li       t5, 0x7f7f7f7f
-  slli     t6, t5, 32
-  or       t5, t5, t6             /* 0x7f7f..7f                         */
+  /* ---- a3 = terminator address ------------------------------------- */
+.Lscan_back:
+  beqz     a1, .Lret_nul
   li       t0, 0x01010101
   slli     t1, t0, 32
   or       t0, t0, t1
-  mul      a3, a1, t0             /* c splatted to all 8 bytes          */
-  mv       a0, t3                 /* q = window end                     */
+  mul      a4, a1, t0             /* splat(c)                           */
+  li       t5, 0x7f7f7f7f
+  slli     t1, t5, 32
+  or       t5, t5, t1             /* 0x7f7f..7f                         */
+  mv       a0, a3
 
 .Lbbyte:
-  beq      a0, a4, .Lnull
+  beq      a0, a2, .Lnull
   andi     t0, a0, 7
   beqz     t0, .Lbword
   addi     a0, a0, -1
@@ -166,12 +146,12 @@ ENTRY(strrchr)
   ret
 
 .Lbword:
-  sub      t0, a0, a4
+  sub      t0, a0, a2
   li       t1, 8
   bltu     t0, t1, .Lbtail
   addi     a0, a0, -8
   ld       t0, 0(a0)
-  xor      t0, t0, a3
+  xor      t0, t0, a4
   and      t1, t0, t5
   add      t1, t1, t5
   or       t1, t1, t0
@@ -183,12 +163,15 @@ ENTRY(strrchr)
   ret
 
 .Lbtail:
-  beq      a0, a4, .Lnull
+  beq      a0, a2, .Lnull
   addi     a0, a0, -1
   lbu      t0, 0(a0)
   bne      t0, a1, .Lbtail
   ret
 
+.Lret_nul:
+  mv       a0, a3
+  ret
 .Lnull:
   li       a0, 0
   ret
@@ -224,4 +207,4 @@ ENTRY(strrchr)
 END(strrchr)
 #endif
 
-#endif /* __riscv_vector && !__riscv_e && !size-optimized */
+#endif

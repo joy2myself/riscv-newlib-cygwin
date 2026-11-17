@@ -1,9 +1,11 @@
-/* strncasecmp - RVV 1.0 candidate v2: vector-first, no vle8ff.
+/* strncasecmp - RVV 1.0 candidate v3: one e8/m1 VLMAX probe chunk then the
+ * e8/m8 loop.  No vle8ff.
  *
  *   int strncasecmp (const char *a, const char *b, size_t n)
  *
- * Same ASCII-only fold and chunk body as strcasecmp-v2, with vl additionally
- * capped by the remaining count so no byte at or after a+n / b+n is touched.
+ * Same ASCII-only fold and chunk body as strcasecmp-v2, with a smaller
+ * (LMUL=m1) first chunk and vl additionally capped by the remaining count
+ * so no byte at or after a+n / b+n is touched.
  * Exhausting n without a NUL or difference returns 0.
  *
  * Page safety: vl = min(n_left, distance-to-a's-page, distance-to-b's-page);
@@ -29,7 +31,6 @@ ENTRY(strncasecmp)
   mv       a3, a2                 /* bytes left                         */
   li       t6, 4095
   li       t5, 4096
-  li       t4, 64
 
   and      t0, a0, t6
   sub      t0, t5, t0
@@ -38,13 +39,10 @@ ENTRY(strncasecmp)
   bgeu     t1, t0, 1f
   mv       t0, t1
 1:
-  bgeu     t0, t4, 2f
-  mv       t4, t0
+  bgeu     a3, t0, 2f
+  mv       t0, a3
 2:
-  bgeu     a3, t4, 3f
-  mv       t4, a3
-3:
-  vsetvli  t2, t4, e8, m4, ta, mu
+  vsetvli  t2, t0, e8, m1, ta, mu
   vle8.v   v8, (a0)
   vle8.v   v16, (a1)
   vsub.vx  v24, v8, a5
