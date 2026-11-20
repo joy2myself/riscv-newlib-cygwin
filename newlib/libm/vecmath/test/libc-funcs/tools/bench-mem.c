@@ -1,3 +1,6 @@
+/* speedup = glibc_ns / rvv_ns (>1: the vector routine is faster).
+   net_speedup subtracts the empty-call overhead, which matters for
+   the 8-64 B rows; ns is the only raw datum.  */
 /* bench9.c -- throughput harness for ALL nine RVV memory routines.
  *
  * The shipped harness/bench/bench.c only measures memcpy, memset, memmove

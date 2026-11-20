@@ -1,3 +1,6 @@
+/* speedup = glibc_ns / rvv_ns (>1: the vector routine is faster).
+   net_speedup subtracts the empty-call overhead, which matters for
+   the 8-64 B rows; ns is the only raw datum.  */
 /* bench8.c -- throughput of the eight RVV string routines vs the platform
  * (glibc) routines, in the same style as the libc-funcs bench harness:
  * best of ROUNDS timed rounds after a warm-up, calls through a volatile

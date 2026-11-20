@@ -1,3 +1,6 @@
+/* speedup = glibc_ns / rvv_ns (>1: the vector routine is faster).
+   net_speedup subtracts the empty-call overhead, which matters for
+   the 8-64 B rows; ns is the only raw datum.  */
 /* Throughput harness: RVV (newlib) vs glibc for the hot string/memory
    routines.
 
